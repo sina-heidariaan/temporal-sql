@@ -1,0 +1,16 @@
+// Test-only fixture for the @prisma/adapter-pg round-trip test.
+// Not shipped (package publishes `dist` only). The integration test drives
+// everything through $queryRaw with ::text casts, so the model is minimal.
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model temporal_probe {
+  id Int @id @default(autoincrement())
+}

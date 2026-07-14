@@ -1,0 +1,120 @@
+/**
+ * Real-Postgres round-trip (insert → select) for `pg` and Drizzle.
+ *
+ * Gated on DATABASE_URL: skipped entirely when it is absent, so the default
+ * `npm test` stays DB-free. CI sets it against a `postgres:16` service; locally
+ * point it at any Postgres 16 instance. Asserts every mapped type preserves its
+ * value to microsecond precision — the package's acceptance criterion.
+ */
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { Temporal } from "@js-temporal/polyfill";
+import pg from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
+import { pgTable } from "drizzle-orm/pg-core";
+import { registerTypeParsers, registerPassthrough, encode } from "../../src/pg.js";
+import * as t from "../../src/drizzle.js";
+import type { TimeWithOffset } from "../../src/index.js";
+
+const url = process.env.DATABASE_URL;
+const d = url ? describe : describe.skip;
+
+const REL = "2000-01-01"; // fixed relativeTo for calendar-safe Duration totals
+
+d("pg round-trip (registerTypeParsers → Temporal on select)", () => {
+  let pool: pg.Pool;
+
+  beforeAll(async () => {
+    // Real adapter path: pg decodes date/time OIDs to Temporal automatically.
+    registerTypeParsers();
+    pool = new pg.Pool({ connectionString: url });
+  });
+  afterAll(async () => {
+    await pool?.end();
+  });
+
+  it("timestamptz → Instant preserves µs", async () => {
+    const original = Temporal.Instant.from("2024-03-10T07:30:45.123456Z");
+    const res = await pool.query<{ v: Temporal.Instant }>("select $1::timestamptz as v", [encode.instant(original)]);
+    expect(res.rows[0]!.v.toString()).toBe(original.toString());
+  });
+
+  it("timestamp → PlainDateTime preserves µs", async () => {
+    const original = Temporal.PlainDateTime.from("1969-07-20T20:17:40.987654");
+    const res = await pool.query<{ v: Temporal.PlainDateTime }>("select $1::timestamp as v", [encode.plainDateTime(original)]);
+    expect(res.rows[0]!.v.toString()).toBe(original.toString());
+  });
+
+  it("date → PlainDate round-trips (incl. BC)", async () => {
+    for (const iso of ["2024-02-29", "1969-07-20"]) {
+      const original = Temporal.PlainDate.from(iso);
+      const res = await pool.query<{ v: Temporal.PlainDate }>("select $1::date as v", [encode.plainDate(original)]);
+      expect(res.rows[0]!.v.toString()).toBe(original.toString());
+    }
+    const bc = Temporal.PlainDate.from({ year: -43, month: 3, day: 15 });
+    const res = await pool.query<{ v: Temporal.PlainDate }>("select $1::date as v", [encode.plainDate(bc)]);
+    expect(res.rows[0]!.v.year).toBe(-43);
+  });
+
+  it("time → PlainTime preserves µs", async () => {
+    const original = Temporal.PlainTime.from("12:34:56.789012");
+    const res = await pool.query<{ v: Temporal.PlainTime }>("select $1::time as v", [encode.plainTime(original)]);
+    expect(res.rows[0]!.v.toString()).toBe(original.toString());
+  });
+
+  it("timetz → { time, offset } round-trips", async () => {
+    const original: TimeWithOffset = { time: Temporal.PlainTime.from("12:34:56.789012"), offset: "+05:30" };
+    const res = await pool.query<{ v: TimeWithOffset }>("select $1::timetz as v", [encode.timetz(original)]);
+    expect(res.rows[0]!.v.time.toString()).toBe(original.time.toString());
+    expect(res.rows[0]!.v.offset).toBe(original.offset);
+  });
+
+  it("interval → Duration preserves µs (positive, negative, fractional)", async () => {
+    for (const iso of ["P1Y2M3DT4H5M6.789012S", "-P3DT4H5M6S", "PT0.5S", "P400D"]) {
+      const original = Temporal.Duration.from(iso);
+      const res = await pool.query<{ v: Temporal.Duration }>("select $1::interval as v", [encode.duration(original)]);
+      expect(res.rows[0]!.v.total({ unit: "microseconds", relativeTo: REL })).toBe(
+        original.total({ unit: "microseconds", relativeTo: REL }),
+      );
+    }
+  });
+});
+
+d("drizzle round-trip", () => {
+  let pool: pg.Pool;
+
+  const events = pgTable("events_ts", {
+    at: t.timestamptz()("at"),
+    span: t.interval()("span"),
+    day: t.date()("day"),
+  });
+
+  beforeAll(async () => {
+    // Drizzle custom columns need raw text from pg, not a decoded Date.
+    registerPassthrough();
+    pool = new pg.Pool({ connectionString: url });
+    const db = drizzle(pool);
+    await db.execute(sql`drop table if exists events_ts`);
+    await db.execute(sql`create table events_ts (at timestamptz, span interval, day date)`);
+  });
+  afterAll(async () => {
+    await pool?.query("drop table if exists events_ts");
+    await pool?.end();
+  });
+
+  it("inserts and selects Temporal values through custom columns", async () => {
+    const db = drizzle(pool);
+    const at = Temporal.Instant.from("2024-03-10T07:30:45.123456Z");
+    const span = Temporal.Duration.from("P1Y2M3DT4H5M6.789012S");
+    const day = Temporal.PlainDate.from("2024-02-29");
+
+    await db.insert(events).values({ at, span, day });
+    const [row] = await db.select().from(events);
+
+    expect(row!.at.toString()).toBe(at.toString());
+    expect(row!.day.toString()).toBe(day.toString());
+    expect(row!.span.total({ unit: "microseconds", relativeTo: REL })).toBe(
+      span.total({ unit: "microseconds", relativeTo: REL }),
+    );
+  });
+});

@@ -1,0 +1,137 @@
+{
+  "name": "temporal-sql",
+  "version": "0.1.0",
+  "description": "Postgres-first codecs mapping SQL date/time types to TC39 Temporal (timestamptz, timestamp, date, time, timetz, interval) for pg, postgres.js, Drizzle and Prisma — with correct interval⇄Duration and surfaced µs↔ns precision. No JS Date.",
+  "type": "module",
+  "license": "MIT",
+  "author": "sina-heidariaan (https://github.com/sina-heidariaan)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sina-heidariaan/temporal-sql.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sina-heidariaan/temporal-sql/issues"
+  },
+  "homepage": "https://github.com/sina-heidariaan/temporal-sql#readme",
+  "keywords": [
+    "temporal",
+    "temporal-api",
+    "postgres",
+    "postgresql",
+    "pg",
+    "postgres.js",
+    "drizzle",
+    "prisma",
+    "timestamptz",
+    "interval",
+    "duration",
+    "codec",
+    "tc39",
+    "sql",
+    "timezone"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./pg": {
+      "import": {
+        "types": "./dist/pg.d.ts",
+        "default": "./dist/pg.js"
+      },
+      "require": {
+        "types": "./dist/pg.d.cts",
+        "default": "./dist/pg.cjs"
+      }
+    },
+    "./postgres-js": {
+      "import": {
+        "types": "./dist/postgres-js.d.ts",
+        "default": "./dist/postgres-js.js"
+      },
+      "require": {
+        "types": "./dist/postgres-js.d.cts",
+        "default": "./dist/postgres-js.cjs"
+      }
+    },
+    "./drizzle": {
+      "import": {
+        "types": "./dist/drizzle.d.ts",
+        "default": "./dist/drizzle.js"
+      },
+      "require": {
+        "types": "./dist/drizzle.d.cts",
+        "default": "./dist/drizzle.cjs"
+      }
+    },
+    "./prisma": {
+      "import": {
+        "types": "./dist/prisma.d.ts",
+        "default": "./dist/prisma.js"
+      },
+      "require": {
+        "types": "./dist/prisma.d.cts",
+        "default": "./dist/prisma.cjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "attw": "node scripts/check-types.mjs",
+    "check": "npm run typecheck && npm run test && npm run build && npm run attw",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
+    "temporal-gregorian": "^0.1.1"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "*",
+    "pg": "*",
+    "postgres": "*"
+  },
+  "peerDependenciesMeta": {
+    "drizzle-orm": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    },
+    "postgres": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.17.0",
+    "@prisma/adapter-pg": "^5.22.0",
+    "@prisma/client": "^5.22.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "drizzle-orm": "^0.36.0",
+    "esbuild": "^0.24.0",
+    "pg": "^8.13.0",
+    "pg-mem": "^3.0.0",
+    "postgres": "^3.4.0",
+    "prisma": "^5.22.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.0"
+  }
+}
