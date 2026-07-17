@@ -26,7 +26,7 @@ Node **18+**. Driver packages are optional peers — install only the one you us
 
 | Peer | Range | Notes |
 |------|-------|-------|
-| `pg` | `>=8.15.0` | Older versions break `import { types } from "pg"` for ESM consumers. |
+| `pg` | `>=8.0.0` | Any `pg` 8.x, ESM or CommonJS. |
 | `postgres` | `>=3.4.0` | postgres.js v3 `types` option. |
 | `drizzle-orm` | `>=0.30.0` | Uses `customType` from `drizzle-orm/pg-core`. |
 

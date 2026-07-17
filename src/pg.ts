@@ -11,9 +11,16 @@
  * (not {@link registerTypeParsers}) so pg hands Drizzle the raw string instead of
  * decoding to a JS `Date` first.
  */
-import { types as pgTypes } from "pg";
+// Default import, not `import { types } from "pg"`. `pg` is CommonJS, so a named
+// import only resolves when Node's cjs-module-lexer can statically detect the
+// export — which it cannot before pg 8.15.0, making ESM consumers on older pg
+// fail at module load with "does not provide an export named 'types'". The
+// default import reads `module.exports` and works on every pg 8.x.
+import pg from "pg";
 import { OID } from "./oids.js";
 import * as C from "./index.js";
+
+const pgTypes = pg.types;
 
 type SetTypeParser = (oid: number, parseFn: (value: string) => unknown) => void;
 

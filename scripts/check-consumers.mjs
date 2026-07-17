@@ -29,14 +29,15 @@ const shell = process.platform === "win32";
  * These pin the exact bounds declared in package.json's `peerDependencies`, so
  * those ranges stay claims we have actually run rather than guesses.
  *
- * `pg` floors at 8.15.0: earlier releases are CJS-only in a way Node's named-export
- * detection cannot see through, so `import { types } from "pg"` — which
- * `temporal-sql/pg` does — throws "does not provide an export named 'types'" for
- * any ESM consumer. CJS consumers work further back, but peerDependencies cannot
- * express a per-module-system floor, so the ESM bound governs.
+ * `pg` floors at 8.0.0 — the first 8.x. It briefly floored at 8.15.0, but that
+ * was compensating for our own `import { types } from "pg"`: a named import from
+ * a CJS package only resolves once Node's cjs-module-lexer can detect the export,
+ * which it cannot before 8.15.0. `src/pg.ts` uses a default import instead, which
+ * reads `module.exports` and works across all of 8.x — so the floor is a real
+ * compatibility bound again rather than a workaround.
  */
 const PEER_SETS = {
-  min: { pg: "8.15.0", "drizzle-orm": "0.30.0" },
+  min: { pg: "8.0.0", "drizzle-orm": "0.30.0" },
   latest: { pg: "latest", "drizzle-orm": "latest" },
 };
 

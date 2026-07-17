@@ -1,6 +1,6 @@
 {
   "name": "temporal-sql",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Postgres-first codecs mapping SQL date/time types to TC39 Temporal (timestamptz, timestamp, date, time, timetz, interval) for pg, postgres.js, Drizzle and Prisma — with correct interval⇄Duration and surfaced µs↔ns precision. No JS Date.",
   "type": "module",
   "license": "MIT",
@@ -107,7 +107,7 @@
   "//peerDependencies": "Bounds are the versions scripts/check-consumers.mjs actually installs and runs (npm run test:consumers). Keep the two in sync.",
   "peerDependencies": {
     "drizzle-orm": ">=0.30.0",
-    "pg": ">=8.15.0",
+    "pg": ">=8.0.0",
     "postgres": ">=3.4.0"
   },
   "peerDependenciesMeta": {

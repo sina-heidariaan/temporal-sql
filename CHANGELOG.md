@@ -3,6 +3,28 @@
 All notable changes to `temporal-sql` are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] — 2026-07-17
+
+### Fixed
+
+- **`temporal-sql/pg` now works on any `pg` 8.x, ESM or CommonJS.** The adapter
+  used `import { types } from "pg"`. `pg` is CommonJS, and a *named* import from
+  CJS only resolves when Node's `cjs-module-lexer` can statically detect the
+  export — which it cannot before `pg@8.15.0`. ESM consumers on older `pg` failed
+  at module load with *"does not provide an export named 'types'"*. The adapter
+  now uses a default import (`import pg from "pg"`), which reads `module.exports`
+  and works across all of `pg` 8.x.
+
+### Changed
+
+- **`pg` peer range relaxed from `>=8.15.0` back to `>=8.0.0`.** The 0.1.1 floor
+  was compensating for the named import above rather than describing a real
+  incompatibility. Because `peerDependencies` ranges are enforced even when
+  `peerDependenciesMeta.optional` is set, that floor caused npm to **fail
+  installs outright** (`ERESOLVE`) for anyone pinned to `pg` 8.0–8.14 — including
+  CommonJS users whose setup worked fine. Both bounds are now installed and run
+  by the consumer gate.
+
 ## [0.1.1] — 2026-07-17
 
 Correctness and packaging. `decodeDuration` now honors its documented contract —
@@ -34,11 +56,9 @@ the published tarball is tested the way real consumers install it.
 ### Changed
 
 - **`peerDependencies` narrowed from `"*"` to tested ranges:** `pg >=8.15.0`,
-  `drizzle-orm >=0.30.0`, `postgres >=3.4.0`. All remain optional. The `pg` floor
-  is not cosmetic: earlier releases break `import { types } from "pg"` for ESM
-  consumers with *"does not provide an export named 'types'"*, which
-  `temporal-sql/pg` does at module load. CommonJS works further back, but
-  `peerDependencies` cannot express a per-module-system floor.
+  `drizzle-orm >=0.30.0`, `postgres >=3.4.0`. All remain optional.
+  **Superseded by 0.1.2** — the `pg` floor was misdiagnosed and is relaxed back to
+  `>=8.0.0` there. Prefer 0.1.2.
 - **`prepublishOnly` now runs the full release gate** (`typecheck`, `test`,
   `build`, `attw`, and the packed-consumer tests) instead of `build` alone, so a
   publish fails if any gate fails.
@@ -102,5 +122,6 @@ Temporal, with adapters for `pg`, `postgres.js`, Drizzle, and Prisma. No JS
   struct rather than a Temporal type; Drizzle requires `registerPassthrough()`
   (mutates pg's global type-parser state). See the README caveats section.
 
+[0.1.2]: https://github.com/sina-heidariaan/temporal-sql/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sina-heidariaan/temporal-sql/releases/tag/v0.1.1
 [0.1.0]: https://github.com/sina-heidariaan/temporal-sql/releases/tag/v0.1.0
