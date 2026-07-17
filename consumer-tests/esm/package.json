@@ -1,0 +1,8 @@
+{
+  "name": "consumer-esm",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  }
+}

@@ -43,12 +43,6 @@ function splitFraction(fracDigits: string, sign: number): Fraction {
   };
 }
 
-/** First capture group as an integer, or 0 if the pattern is absent. */
-function num(re: RegExp, text: string): number {
-  const m = re.exec(text);
-  return m ? parseInt(m[1] as string, 10) : 0;
-}
-
 const ISO_RE =
   /^([+-]?)P(?:([+-]?\d+)Y)?(?:([+-]?\d+)M)?(?:([+-]?\d+)W)?(?:([+-]?\d+)D)?(?:T(?:([+-]?\d+)H)?(?:([+-]?\d+)M)?(?:([+-]?\d+)(?:\.(\d+))?S)?)?$/i;
 
@@ -60,6 +54,11 @@ const ISO_RE =
 function parseIso(raw: string): Fields {
   const m = ISO_RE.exec(raw);
   if (!m) throw new UnsupportedValueError(`Unparseable ISO-8601 interval: "${raw}"`);
+  // Every field group is optional, so a bare `P`/`PT` (or sign-only `-P`) matches.
+  // ISO-8601 requires at least one component; reject rather than return PT0S.
+  if (m.slice(2, 9).every((g) => g === undefined)) {
+    throw new UnsupportedValueError(`ISO-8601 interval "${raw}" has no duration fields.`);
+  }
   const overall = m[1] === "-" ? -1 : 1;
   const int = (s: string | undefined): number => (s ? parseInt(s, 10) : 0);
   const weeks = int(m[4]);
@@ -79,23 +78,65 @@ function parseIso(raw: string): Fields {
   };
 }
 
+/** Units a Postgres-style interval can name. `weeks` is folded into days later. */
+type Unit = "years" | "months" | "weeks" | "days" | "hours" | "minutes" | "seconds";
+
+/** Every unit word Postgres emits, singular and plural. */
+const UNIT_WORDS: Record<string, Unit> = {
+  year: "years",
+  years: "years",
+  mon: "months",
+  mons: "months",
+  month: "months",
+  months: "months",
+  week: "weeks",
+  weeks: "weeks",
+  day: "days",
+  days: "days",
+  hour: "hours",
+  hours: "hours",
+  min: "minutes",
+  mins: "minutes",
+  minute: "minutes",
+  minutes: "minutes",
+  sec: "seconds",
+  secs: "seconds",
+  second: "seconds",
+  seconds: "seconds",
+};
+
+/** Default `postgres` clock: one sign governs the whole `HH:MM:SS[.frac]`. */
+const CLOCK_RE = /([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d+))?/y;
+/** A signed count followed by a unit word (`3 days`, `-2 mons`, `6.5 secs`). */
+const UNIT_RE = /([+-]?)(\d+)(?:\.(\d+))?\s+([a-z]+)/iy;
+const WS_RE = /\s*/y;
+
 /**
  * Parse the default `postgres` style (`1 year 2 mons 3 days 04:05:06`) and
  * `postgres_verbose` (`@ 1 year 2 mons 3 days 4 hours 5 mins 6 secs [ago]`).
  * Date fields are individually signed; the `HH:MM:SS` clock carries one sign.
+ *
+ * This is a strict left-to-right tokenizer, not a set of field searches: it
+ * requires at least one component, rejects any unrecognized remainder, and
+ * rejects repeated fields. Anything else would silently return a wrong Duration
+ * for malformed input, contradicting {@link decodeDuration}'s contract.
  */
 function parsePostgres(raw: string): Fields {
   let body = raw;
   let overall = 1;
-  if (body.startsWith("@")) body = body.slice(1).trim();
+  let verbose = false;
+  if (body.startsWith("@")) {
+    verbose = true;
+    body = body.slice(1).trim();
+  }
   if (/\bago\s*$/.test(body)) {
     overall = -1;
     body = body.replace(/\bago\s*$/, "").trim();
   }
 
   // `IntervalStyle = sql_standard` renders year-month as `±Y-M` (e.g. `+1-2 +3 +4:05:06`),
-  // which this parser cannot read. Reject it explicitly rather than silently
-  // grabbing only the clock component and returning a wrong Duration.
+  // which this parser cannot read. Reject it with a targeted message rather than
+  // letting it fall through to the generic "unparseable" error below.
   if (/(^|\s)[+-]?\d+-\d+(\s|$)/.test(body)) {
     throw new UnsupportedValueError(
       `Interval "${raw}" looks like IntervalStyle=sql_standard, which is not supported. ` +
@@ -103,46 +144,113 @@ function parsePostgres(raw: string): Fields {
     );
   }
 
-  const years = num(/([+-]?\d+)\s+years?/, body);
-  const months = num(/([+-]?\d+)\s+mons?/, body);
-  const weeks = num(/([+-]?\d+)\s+weeks?/, body);
-  const daysField = num(/([+-]?\d+)\s+days?/, body);
+  const acc: Record<Unit, number> = {
+    years: 0,
+    months: 0,
+    weeks: 0,
+    days: 0,
+    hours: 0,
+    minutes: 0,
+    seconds: 0,
+  };
 
-  // Verbose word clock (mutually exclusive with the HH:MM:SS form).
-  const vHours = num(/([+-]?\d+)\s+hours?/, body);
-  const vMins = num(/([+-]?\d+)\s+mins?/, body);
-  const vSecsMatch = /([+-]?)(\d+)(?:\.(\d+))?\s+secs?/.exec(body);
+  // `postgres_verbose` renders a zero interval as the bare token `@ 0` — the one
+  // real output with a count and no unit word, so the tokenizer below would
+  // reject it. (Default style emits `00:00:00` and iso_8601 emits `PT0S`, both
+  // of which tokenize normally.)
+  if (verbose && body === "0") {
+    return {
+      years: 0,
+      months: 0,
+      days: 0,
+      hours: 0,
+      minutes: 0,
+      seconds: 0,
+      milliseconds: 0,
+      microseconds: 0,
+      nanoseconds: 0,
+    };
+  }
+  const seen = new Set<Unit>();
+  const claim = (unit: Unit): void => {
+    if (seen.has(unit)) {
+      throw new UnsupportedValueError(`Interval "${raw}" specifies ${unit} more than once.`);
+    }
+    seen.add(unit);
+  };
 
-  // Default `postgres` clock: one sign governs the whole HH:MM:SS[.frac].
-  const clock = /([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d+))?/.exec(body);
-
-  let hours = vHours;
-  let minutes = vMins;
-  let seconds = 0;
   let fracDigits = "";
-  let clockSign = 1;
+  let fracSign = 1;
+  let cursor = 0;
+  let components = 0;
 
-  if (clock) {
-    clockSign = clock[1] === "-" ? -1 : 1;
-    hours = clockSign * parseInt(clock[2] as string, 10);
-    minutes = clockSign * parseInt(clock[3] as string, 10);
-    seconds = clockSign * parseInt(clock[4] as string, 10);
-    fracDigits = clock[5] ?? "";
-  } else if (vSecsMatch) {
-    clockSign = vSecsMatch[1] === "-" ? -1 : 1;
-    seconds = clockSign * parseInt(vSecsMatch[2] as string, 10);
-    fracDigits = vSecsMatch[3] ?? "";
+  for (;;) {
+    WS_RE.lastIndex = cursor;
+    WS_RE.exec(body);
+    cursor = WS_RE.lastIndex;
+    if (cursor >= body.length) break;
+
+    CLOCK_RE.lastIndex = cursor;
+    const clock = CLOCK_RE.exec(body);
+    if (clock) {
+      // The clock carries all three fields at once, so it collides with the
+      // verbose word forms (`4 hours 04:05:06` is not something Postgres emits).
+      claim("hours");
+      claim("minutes");
+      claim("seconds");
+      const sign = clock[1] === "-" ? -1 : 1;
+      acc.hours = sign * parseInt(clock[2] as string, 10);
+      acc.minutes = sign * parseInt(clock[3] as string, 10);
+      acc.seconds = sign * parseInt(clock[4] as string, 10);
+      fracDigits = clock[5] ?? "";
+      fracSign = sign;
+      cursor = CLOCK_RE.lastIndex;
+      components++;
+      continue;
+    }
+
+    UNIT_RE.lastIndex = cursor;
+    const field = UNIT_RE.exec(body);
+    if (field) {
+      const word = field[4] as string;
+      const unit = UNIT_WORDS[word.toLowerCase()];
+      if (!unit) {
+        throw new UnsupportedValueError(`Unrecognized unit "${word}" in interval "${raw}".`);
+      }
+      // Only seconds carry a fraction; Postgres never emits `1.5 days`.
+      if (field[3] !== undefined && unit !== "seconds") {
+        throw new UnsupportedValueError(`Fractional ${unit} are not supported in interval "${raw}".`);
+      }
+      claim(unit);
+      const sign = field[1] === "-" ? -1 : 1;
+      acc[unit] = sign * parseInt(field[2] as string, 10);
+      if (unit === "seconds") {
+        fracDigits = field[3] ?? "";
+        fracSign = sign;
+      }
+      cursor = UNIT_RE.lastIndex;
+      components++;
+      continue;
+    }
+
+    throw new UnsupportedValueError(
+      `Unparseable Postgres interval: "${raw}" (unrecognized text at offset ${cursor}).`,
+    );
   }
 
-  const frac = splitFraction(fracDigits, clockSign);
+  if (components === 0) {
+    throw new UnsupportedValueError(`Unparseable Postgres interval: "${raw}" (no duration fields).`);
+  }
+
+  const frac = splitFraction(fracDigits, fracSign);
 
   return {
-    years: overall * years,
-    months: overall * months,
-    days: overall * (daysField + weeks * 7),
-    hours: overall * hours,
-    minutes: overall * minutes,
-    seconds: overall * seconds,
+    years: overall * acc.years,
+    months: overall * acc.months,
+    days: overall * (acc.days + acc.weeks * 7),
+    hours: overall * acc.hours,
+    minutes: overall * acc.minutes,
+    seconds: overall * acc.seconds,
     milliseconds: overall * frac.milliseconds,
     microseconds: overall * frac.microseconds,
     nanoseconds: overall * frac.nanoseconds,

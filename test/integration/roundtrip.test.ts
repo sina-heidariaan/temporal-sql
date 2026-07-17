@@ -78,6 +78,48 @@ d("pg round-trip (registerTypeParsers → Temporal on select)", () => {
       );
     }
   });
+
+  // decodeDuration claims to parse "the exact grammars Postgres emits". The
+  // strict tokenizer (v0.1.1) can only honor that claim if it is checked against
+  // interval_out itself, across every IntervalStyle — including the zero values,
+  // where postgres_verbose emits the bare token `@ 0`.
+  it("parses interval_out across every supported IntervalStyle", async () => {
+    // Expectations are independent of the parser: each is what the interval
+    // means, asserted against whatever text the given IntervalStyle renders.
+    const cases: Array<[input: string, expected: string]> = [
+      ["1 year 2 mons 3 days 4:05:06.789012", "P1Y2M3DT4H5M6.789012S"],
+      ["-3 days -4:05:06", "-P3DT4H5M6S"],
+      ["0", "PT0S"],
+      ["1 day", "P1D"],
+      ["400 days", "P400D"],
+    ];
+    const total = (v: Temporal.Duration) => v.total({ unit: "microseconds", relativeTo: REL });
+
+    for (const style of ["postgres", "postgres_verbose", "iso_8601"]) {
+      const client = await pool.connect();
+      try {
+        // `set local` inside a transaction: a plain `set` would survive
+        // release() and leak the style into whichever test reuses the connection.
+        await client.query("begin");
+        await client.query(`set local intervalstyle = '${style}'`);
+        for (const [input, expected] of cases) {
+          // `raw` is the text interval_out actually produced; `v` is that same
+          // text after registerTypeParsers ran it through decodeDuration.
+          const { rows } = await client.query<{ raw: string; v: Temporal.Duration }>(
+            "select $1::interval::text as raw, $1::interval as v",
+            [input],
+          );
+          const { raw, v } = rows[0]!;
+          expect(total(v), `style=${style} input="${input}" raw="${raw}"`).toBe(
+            total(Temporal.Duration.from(expected)),
+          );
+        }
+      } finally {
+        await client.query("rollback").catch(() => {});
+        client.release();
+      }
+    }
+  });
 });
 
 d("drizzle round-trip", () => {

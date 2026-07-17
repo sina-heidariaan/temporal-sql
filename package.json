@@ -1,6 +1,6 @@
 {
   "name": "temporal-sql",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Postgres-first codecs mapping SQL date/time types to TC39 Temporal (timestamptz, timestamp, date, time, timetz, interval) for pg, postgres.js, Drizzle and Prisma — with correct interval⇄Duration and surfaced µs↔ns precision. No JS Date.",
   "type": "module",
   "license": "MIT",
@@ -95,17 +95,20 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "attw": "node scripts/check-types.mjs",
+    "test:consumers": "npm run build && node scripts/check-consumers.mjs",
     "check": "npm run typecheck && npm run test && npm run build && npm run attw",
-    "prepublishOnly": "npm run build"
+    "release": "npm run check && node scripts/check-consumers.mjs",
+    "prepublishOnly": "npm run release"
   },
   "dependencies": {
     "@js-temporal/polyfill": "^0.5.1",
     "temporal-gregorian": "^0.1.1"
   },
+  "//peerDependencies": "Bounds are the versions scripts/check-consumers.mjs actually installs and runs (npm run test:consumers). Keep the two in sync.",
   "peerDependencies": {
-    "drizzle-orm": "*",
-    "pg": "*",
-    "postgres": "*"
+    "drizzle-orm": ">=0.30.0",
+    "pg": ">=8.15.0",
+    "postgres": ">=3.4.0"
   },
   "peerDependenciesMeta": {
     "drizzle-orm": {
@@ -119,7 +122,7 @@
     }
   },
   "devDependencies": {
-    "@arethetypeswrong/cli": "^0.17.0",
+    "@arethetypeswrong/cli": "^0.18.3",
     "@prisma/adapter-pg": "^5.22.0",
     "@prisma/client": "^5.22.0",
     "@types/node": "^22.0.0",

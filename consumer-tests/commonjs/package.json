@@ -1,0 +1,7 @@
+{
+  "name": "consumer-commonjs",
+  "private": true,
+  "scripts": {
+    "start": "node index.cjs"
+  }
+}

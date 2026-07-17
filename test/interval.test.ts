@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Temporal } from "@js-temporal/polyfill";
 import { decodeDuration, encodeDuration } from "../src/interval.js";
-import { MixedSignIntervalError, PrecisionError } from "../src/shared.js";
+import { MixedSignIntervalError, PrecisionError, UnsupportedValueError } from "../src/shared.js";
 
 describe("decodeDuration — postgres default style", () => {
   it("full positive interval", () => {
@@ -92,6 +92,78 @@ describe("decodeDuration — sql_standard rejection", () => {
   it("throws rather than silently misparsing sql_standard year-month", () => {
     expect(() => decodeDuration("+1-2 +3 +4:05:06")).toThrow(/sql_standard/);
     expect(() => decodeDuration("-1-2")).toThrow(/sql_standard/);
+  });
+});
+
+describe("decodeDuration — strict parsing", () => {
+  // Before v0.1.1 the postgres path harvested field regexes from anywhere in the
+  // string, so these silently returned a wrong Duration instead of throwing.
+  it.each([
+    ["empty string", ""],
+    ["whitespace only", "   "],
+    ["pure junk", "nonsense"],
+    ["trailing junk", "1 day trailing"],
+    ["leading junk", "garbage 1 day"],
+    ["junk between fields", "1 day garbage 2 mons"],
+    ["bare P", "P"],
+    ["sign-only P", "-P"],
+    ["empty time designator", "PT"],
+    ["unknown unit word", "3 fortnights"],
+    ["count with no unit", "3"],
+    ["fractional non-seconds", "1.5 days"],
+  ])("throws on %s", (_label, input) => {
+    expect(() => decodeDuration(input)).toThrow(UnsupportedValueError);
+  });
+
+  it.each([
+    ["repeated days", "1 day 2 days"],
+    ["repeated years across spellings", "1 year 2 years"],
+    ["repeated mons across spellings", "1 mon 2 months"],
+    ["word clock colliding with HH:MM:SS", "4 hours 04:05:06"],
+    ["repeated clock", "04:05:06 07:08:09"],
+  ])("throws on %s", (_label, input) => {
+    expect(() => decodeDuration(input)).toThrow(UnsupportedValueError);
+  });
+
+  it("keeps accepting a single component", () => {
+    expect(decodeDuration("3 days").days).toBe(3);
+    expect(decodeDuration("04:05:06").hours).toBe(4);
+  });
+
+  // Every shape Postgres's interval_out can actually emit must survive the
+  // tokenizer. `@ 0` is the awkward one: a count with no unit word.
+  it.each([
+    ["postgres_verbose zero", "@ 0", "PT0S"],
+    ["default-style zero", "00:00:00", "PT0S"],
+    ["iso_8601 zero", "PT0S", "PT0S"],
+    ["verbose single field", "@ 1 day", "P1D"],
+    ["verbose ago", "@ 1 day ago", "-P1D"],
+    ["verbose word clock", "@ 1 year 2 mons 3 days 4 hours 5 mins 6 secs", "P1Y2M3DT4H5M6S"],
+    ["default full", "1 year 2 mons 3 days 04:05:06", "P1Y2M3DT4H5M6S"],
+    ["negative clock fraction", "-00:00:01.5", "-PT1.5S"],
+  ])("accepts real Postgres output: %s", (_label, input, expected) => {
+    expect(decodeDuration(input).toString()).toBe(expected);
+  });
+
+  it("does not accept a bare 0 outside the verbose form", () => {
+    expect(() => decodeDuration("0")).toThrow(UnsupportedValueError);
+  });
+
+  it("folds a weeks field into days", () => {
+    expect(decodeDuration("2 weeks 1 day").days).toBe(15);
+  });
+
+  it("reports sql_standard with its own message, not the generic one", () => {
+    expect(() => decodeDuration("+1-2 +3 +4:05:06")).toThrow(/sql_standard/);
+  });
+
+  it('"-P-3D" cancels signs to P3D rather than throwing', () => {
+    // Postgres never emits an overall sign together with per-field signs, so this
+    // is not real DB output. -1 × -3 = +3 is coherent; locked in deliberately.
+    // See private/temporal-sql-ship-v0.1.1.md.
+    const d = decodeDuration("-P-3D");
+    expect(d.days).toBe(3);
+    expect(d.sign).toBe(1);
   });
 });
 

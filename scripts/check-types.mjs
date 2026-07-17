@@ -1,11 +1,11 @@
 /**
  * CI type/exports gate (attw).
  *
- * Why not just `attw --pack .`? attw@0.17 crashes ("Cannot read properties of
- * undefined (reading 'filename')") when it deep-resolves the installed
- * `@js-temporal/polyfill` types from this repo's node_modules — an attw×polyfill
- * bug, not a defect in this package. Running attw against the packed tarball in a
- * clean temp dir sidesteps it and validates exactly what consumers resolve.
+ * Why not just `attw --pack .`? Running attw against the packed tarball in a
+ * clean temp dir validates exactly what consumers resolve, independent of this
+ * repo's own node_modules. (Historically this also sidestepped an attw crash on
+ * packages wrapping `@js-temporal/polyfill`, caused by a transitive `fflate@0.8.3`
+ * tarball-extraction bug — fixed in attw 0.18.3, which this package now requires.)
  *
  * node10 resolution is intentionally ignored: this is an ESM/exports-based
  * package targeting Node 18+, and node10 (legacy CJS, no `exports` support)
@@ -47,27 +47,15 @@ try {
 
 process.stdout.write(output + "\n");
 
-// Known upstream attw×polyfill crash. attw internally resolves @js-temporal/polyfill
-// (a transitive dep via temporal-gregorian), whose fallback-array `exports` makes
-// attw itself throw "Cannot read properties of undefined (reading 'filename')".
-// This is an attw bug, NOT a problem with this package's exports (a real exports
-// problem surfaces as "Resolution failed" output, not a JS crash) — and it is
-// environment-dependent (attw's internal install sometimes yields an empty
-// polyfill dist). Treat this exact crash as a non-fatal skip so a tooling bug
-// can't block the release; the exports map is still validated on every run where
-// attw resolves cleanly (locally and on other CI Node versions).
-if (failed && /reading 'filename'/.test(output)) {
-  console.warn(
-    "attw hit the known @js-temporal/polyfill crash ('reading filename') — an " +
-      "upstream attw bug, not a defect in this package. Skipping the attw gate " +
-      "for this run; exports are validated on runs where attw resolves cleanly.",
-  );
-  process.exit(0);
-}
 // Treat node16/bundler failures as gate failures; node10-only failures pass.
 const hasNode16OrBundlerFailure = /node16[^\n]*(💀|❌|Resolution failed|masquerad)/i.test(output);
 if (hasNode16OrBundlerFailure) {
   console.error("attw found a node16/bundler resolution problem.");
+  process.exit(1);
+}
+// Any other non-node10 attw failure (e.g. a genuine crash) fails the gate.
+if (failed && !/node10/.test(output.replace(/node16|bundler/g, ""))) {
+  console.error("attw exited non-zero:\n" + output);
   process.exit(1);
 }
 console.log("attw gate: node16 (CJS+ESM) and bundler resolve cleanly (node10 ignored).");

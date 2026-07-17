@@ -9,8 +9,11 @@ jobs:
   check:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        node: [18, 20, 22]
+        # 24 and 26 are not just newer runtimes: Node 26 enables Temporal
+        # natively, so this exercises native Temporal alongside the polyfill.
+        node: [18, 20, 22, 24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +28,25 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run attw
+
+  consumers:
+    # Proves the packed tarball works for real dependants (ESM, CJS, and types)
+    # at both ends of the declared peerDependencies ranges. `npm test` only ever
+    # exercises src/, so this is the gate that would catch a broken exports map.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        peers: [min, latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/check-consumers.mjs --peers=${{ matrix.peers }}
 
   integration:
     runs-on: ubuntu-latest

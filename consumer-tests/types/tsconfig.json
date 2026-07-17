@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    // node16 is the resolution mode real consumers use, and the one that
+    // actually honors the `exports` map's import/require conditions — so this
+    // checks the .d.ts and .d.cts arms separately, exactly as published.
+    "module": "node16",
+    "moduleResolution": "node16",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["index.ts", "require.cts"]
+}
