@@ -27,6 +27,23 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  attw:
+    # Not in the matrix above: attw statically inspects the packed tarball's
+    # `exports` map, so its result does not depend on the Node version running
+    # it. It also requires Node >=20 itself (0.17.4 was the last release
+    # supporting 18), which this package still supports.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # `files` is ["dist"] and there is no prepack hook, so the tarball attw
+      # inspects is empty unless we build first.
+      - run: npm run build
       - run: npm run attw
 
   consumers:

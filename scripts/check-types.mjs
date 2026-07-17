@@ -10,6 +10,9 @@
  * node10 resolution is intentionally ignored: this is an ESM/exports-based
  * package targeting Node 18+, and node10 (legacy CJS, no `exports` support)
  * cannot resolve subpath exports by design.
+ *
+ * This gate is Node-version-independent by nature — it statically inspects the
+ * tarball's `exports` map — so CI runs it once rather than across the matrix.
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
@@ -19,6 +22,28 @@ import { join } from "node:path";
 const root = process.cwd();
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+
+/**
+ * Pinned deliberately. `npx -y <pkg>` resolves the *latest* release, so without
+ * a pin this gate silently tracks whatever attw ships today and the
+ * devDependency range is decorative. Keep in sync with package.json.
+ */
+const ATTW_VERSION = "0.18.5";
+
+/**
+ * attw itself requires Node >=20 (0.17.4 was the last release supporting 18).
+ * This package supports Node 18, so a contributor on 18 can legitimately run
+ * `npm run check` — skip with an explanation rather than crashing in attw's
+ * internals with an unrelated-looking "reading 'filename'" TypeError.
+ */
+const nodeMajor = Number(process.versions.node.split(".")[0]);
+if (nodeMajor < 20) {
+  console.log(
+    `attw gate: skipped — @arethetypeswrong/cli@${ATTW_VERSION} requires Node >=20 ` +
+      `(this is ${process.version}). The gate is Node-independent; CI runs it on Node 22.`,
+  );
+  process.exit(0);
+}
 
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: "pipe", encoding: "utf8", shell: process.platform === "win32", ...opts });
@@ -34,7 +59,7 @@ const clean = mkdtempSync(join(tmpdir(), "attw-"));
 let output = "";
 let failed = false;
 try {
-  output = run(npx, ["-y", "@arethetypeswrong/cli", tarballPath, "--ignore-rules", "cjs-resolves-to-esm"], {
+  output = run(npx, ["-y", `@arethetypeswrong/cli@${ATTW_VERSION}`, tarballPath, "--ignore-rules", "cjs-resolves-to-esm"], {
     cwd: clean,
   });
 } catch (err) {
