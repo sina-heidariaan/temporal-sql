@@ -1,8 +1,9 @@
 # temporal-sql
 
 > Postgres ⇄ TC39 **Temporal** codecs for `pg`, `postgres.js`, Drizzle, and
-> Prisma. Correct `interval`↔`Duration`, microsecond-precision safety, and **no
-> JavaScript `Date`** anywhere.
+> Prisma. Supports **every PostgreSQL `IntervalStyle`**, correct
+> `interval`↔`Duration`, microsecond-precision safety, and **no JavaScript
+> `Date`** anywhere.
 
 [![npm](https://img.shields.io/npm/v/temporal-sql.svg)](https://www.npmjs.com/package/temporal-sql)
 [![license](https://img.shields.io/npm/l/temporal-sql.svg)](./LICENSE)
@@ -44,17 +45,24 @@ two are the reason this package exists.
 
 Postgres interval text is deceptively hard: multiple output styles, per-field
 signs, a single-sign clock component, fractional seconds, and negatives that
-`Temporal.Duration.from` outright rejects. `temporal-sql` gets them all right.
+`Temporal.Duration.from` outright rejects. `temporal-sql` gets them all right —
+and decodes **all four** `IntervalStyle`s Postgres can emit (`postgres`,
+`postgres_verbose`, `iso_8601`, `sql_standard`).
 
 ```ts
 import { decodeDuration, encodeDuration } from "temporal-sql";
 
 decodeDuration("1 year 2 mons 3 days 04:05:06.789012");
 //        → Temporal.Duration P1Y2M3DT4H5M6.789012S
-decodeDuration("P-3DT-4H-5M-6.5S");   // Postgres iso_8601 negative — handled
+decodeDuration("P-3DT-4H-5M-6.5S");   // iso_8601 negative — handled
+decodeDuration("+1-2 +3 +4:05:06");   // sql_standard — handled
 encodeDuration(Temporal.Duration.from("-P3DT4H"));
 //        → "P-3DT-4H"  (per-field signs; a bare "-P…" is rejected by Postgres)
 ```
+
+Decoding auto-detects the style, so you don't have to know or pin one. If you
+want to guarantee a compatible session up front, see
+[session compatibility](#session-compatibility).
 
 A Postgres interval like `1 mon -3 days` **cannot** be represented as one
 `Temporal.Duration` (months vs days are calendar-ambiguous). Rather than corrupt
@@ -175,6 +183,44 @@ const mapped = rows.map((r) => decodeRow(r, { created_at: "instant", span: "dura
 ```
 
 ---
+
+## Session compatibility
+
+Decoding auto-detects the interval style, but the `date`/`timestamp` codecs need
+an **ISO `DateStyle`** (so values arrive as `YYYY-MM-DD ...`). A non-ISO session
+surfaces late, as a per-value parse error. The `temporal-sql/session` helpers
+check — or set — a compatible session up front. They take a small query function,
+so they work with any driver:
+
+```ts
+import { assertTemporalSqlSession, configureTemporalSqlSession } from "temporal-sql/session";
+
+// Throws a clear diagnostic if DateStyle isn't ISO (or IntervalStyle is unknown):
+await assertTemporalSqlSession((t) => pool.query(t));           // pg
+await assertTemporalSqlSession((t) => sql.unsafe(t));           // postgres.js
+await assertTemporalSqlSession((t) => db.execute(sql.raw(t)));  // drizzle
+
+// Or set a known-good session on this connection and return the applied settings:
+await configureTemporalSqlSession((t) => pool.query(t), {
+  dateStyle: "ISO",        // default
+  intervalStyle: "iso_8601", // default; any of the four is accepted
+});
+```
+
+Both operate **per connection** — a `SET` affects only the session that runs it,
+so run them on the specific pooled connection you query on.
+
+## Timezone semantics
+
+`temporal-sql` is timezone-**safe**, not timezone-**preserving** — because
+`timestamptz` itself does not preserve a zone:
+
+- `timestamp` → `Temporal.PlainDateTime` — a local wall-clock value, no zone.
+- `timestamptz` → `Temporal.Instant` — an exact instant. Postgres stores UTC and
+  does **not** retain the original named zone, so neither can we.
+- To get a `Temporal.ZonedDateTime`, supply an IANA zone yourself:
+  `decodeZonedDateTime(text, "Europe/Berlin")`. The zone is your input, not data
+  recovered from the column.
 
 ## Precision & caveats
 

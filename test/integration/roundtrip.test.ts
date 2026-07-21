@@ -14,7 +14,7 @@ import { sql } from "drizzle-orm";
 import { pgTable } from "drizzle-orm/pg-core";
 import { registerTypeParsers, registerPassthrough, encode } from "../../src/pg.js";
 import * as t from "../../src/drizzle.js";
-import type { TimeWithOffset } from "../../src/index.js";
+import { decodeDuration, MixedSignIntervalError, type TimeWithOffset } from "../../src/index.js";
 
 const url = process.env.DATABASE_URL;
 const d = url ? describe : describe.skip;
@@ -87,15 +87,17 @@ d("pg round-trip (registerTypeParsers → Temporal on select)", () => {
     // Expectations are independent of the parser: each is what the interval
     // means, asserted against whatever text the given IntervalStyle renders.
     const cases: Array<[input: string, expected: string]> = [
-      ["1 year 2 mons 3 days 4:05:06.789012", "P1Y2M3DT4H5M6.789012S"],
-      ["-3 days -4:05:06", "-P3DT4H5M6S"],
-      ["0", "PT0S"],
+      ["1 year 2 mons 3 days 4:05:06.789012", "P1Y2M3DT4H5M6.789012S"], // mixed
+      ["-3 days -4:05:06", "-P3DT4H5M6S"], // negative day-time
+      ["1 year 2 mons", "P1Y2M"], // year-month-only
+      ["3 days 4:05:06", "P3DT4H5M6S"], // day-time-only
+      ["0", "PT0S"], // zero (sql_standard renders this as bare `0`)
       ["1 day", "P1D"],
       ["400 days", "P400D"],
     ];
     const total = (v: Temporal.Duration) => v.total({ unit: "microseconds", relativeTo: REL });
 
-    for (const style of ["postgres", "postgres_verbose", "iso_8601"]) {
+    for (const style of ["postgres", "postgres_verbose", "iso_8601", "sql_standard"]) {
       const client = await pool.connect();
       try {
         // `set local` inside a transaction: a plain `set` would survive
@@ -118,6 +120,22 @@ d("pg round-trip (registerTypeParsers → Temporal on select)", () => {
         await client.query("rollback").catch(() => {});
         client.release();
       }
+    }
+  });
+
+  // A mixed-sign interval (`1 mon -3 days`) is real Postgres output but cannot be
+  // one Temporal.Duration. Verify the sql_standard rendering PG emits for it still
+  // trips MixedSignIntervalError rather than silently misparsing.
+  it("mixed-sign sql_standard interval throws MixedSignIntervalError", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("set local intervalstyle = 'sql_standard'");
+      const { rows } = await client.query<{ raw: string }>("select '1 mon -3 days'::interval::text as raw");
+      expect(() => decodeDuration(rows[0]!.raw)).toThrow(MixedSignIntervalError);
+    } finally {
+      await client.query("rollback").catch(() => {});
+      client.release();
     }
   });
 });

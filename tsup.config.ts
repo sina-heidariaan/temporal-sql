@@ -10,6 +10,7 @@ export default defineConfig({
     "src/postgres-js.ts",
     "src/drizzle.ts",
     "src/prisma.ts",
+    "src/session.ts",
   ],
   format: ["esm", "cjs"],
   dts: true,

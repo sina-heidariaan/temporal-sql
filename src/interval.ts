@@ -134,16 +134,6 @@ function parsePostgres(raw: string): Fields {
     body = body.replace(/\bago\s*$/, "").trim();
   }
 
-  // `IntervalStyle = sql_standard` renders year-month as `±Y-M` (e.g. `+1-2 +3 +4:05:06`),
-  // which this parser cannot read. Reject it with a targeted message rather than
-  // letting it fall through to the generic "unparseable" error below.
-  if (/(^|\s)[+-]?\d+-\d+(\s|$)/.test(body)) {
-    throw new UnsupportedValueError(
-      `Interval "${raw}" looks like IntervalStyle=sql_standard, which is not supported. ` +
-        `Set the session to the default 'postgres' style or 'iso_8601'.`,
-    );
-  }
-
   const acc: Record<Unit, number> = {
     years: 0,
     months: 0,
@@ -257,6 +247,111 @@ function parsePostgres(raw: string): Fields {
   };
 }
 
+/** All-zero fields, used for the bare `0` that `sql_standard` emits for a zero interval. */
+const ZERO_FIELDS: Fields = {
+  years: 0,
+  months: 0,
+  days: 0,
+  hours: 0,
+  minutes: 0,
+  seconds: 0,
+  milliseconds: 0,
+  microseconds: 0,
+  nanoseconds: 0,
+};
+
+// `sql_standard` renders an interval as up to three space-separated tokens, in
+// order: a year-month token `±Y-M`, a bare day integer `±D`, and a clock
+// `±H:M:S[.frac]` — any subset.
+//
+// Signs are the subtle part. When a subset shares one sign, Postgres writes a
+// leading sign and leaves the clock *unsigned*, so an unsigned clock inherits the
+// day's sign: `-3 4:05:06` means -3 days AND -4:05:06 (verified against PG 16 —
+// `extract` on `-3 4:05:06` yields all-negative fields). When the day-time part
+// genuinely mixes signs, Postgres instead forces an explicit-sign form with a
+// `+0-0` year-month prefix (`+0-0 +3 -4:05:06`), and `finalize` rejects that as a
+// `MixedSignIntervalError`. So: use an explicit clock sign when present; otherwise
+// inherit the day's sign.
+const SS_YM = /^([+-]?)(\d+)-(\d+)$/;
+const SS_CLOCK = /^([+-]?)(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$/;
+const SS_DAY = /^([+-]?)(\d+)$/;
+
+/** A year-month token anywhere in the string is an unambiguous `sql_standard` marker. */
+const SS_HAS_YM = /(?:^|\s)[+-]?\d+-\d+(?:\s|$)/;
+/**
+ * A bare day integer immediately followed by a clock (`3 4:05:06`) is the other
+ * `sql_standard` marker. The default `postgres` style never emits a bare integer
+ * next to a clock — it always words the day (`3 days 04:05:06`) — so this cannot
+ * false-match `postgres`/`postgres_verbose` output, nor a lone clock.
+ */
+const SS_HAS_DAY_CLOCK = /(?:^|\s)[+-]?\d+\s+[+-]?\d+:\d{2}:\d{2}(?:\.\d+)?(?:\s|$)/;
+
+/** Route to {@link parseSqlStandard} only on an unambiguous marker (a lone clock stays `postgres`). */
+function isSqlStandard(body: string): boolean {
+  return SS_HAS_YM.test(body) || SS_HAS_DAY_CLOCK.test(body);
+}
+
+/**
+ * Parse the `sql_standard` output style (`+1-2 +3 +4:05:06`). Strict, like
+ * {@link parsePostgres}: every token must classify as year-month / day / clock,
+ * each kind appears at most once, and the fixed order is enforced.
+ */
+function parseSqlStandard(raw: string): Fields {
+  const tokens = raw.split(/\s+/).filter(Boolean);
+  let years = 0;
+  let months = 0;
+  let days = 0;
+  let hours = 0;
+  let minutes = 0;
+  let seconds = 0;
+  let fracDigits = "";
+  let fracSign = 1;
+  let haveYm = false;
+  let haveDay = false;
+  let haveClock = false;
+  let daySign = 1; // resolved sign of the day token; fills an unsigned clock (see above)
+
+  for (const tok of tokens) {
+    let m: RegExpExecArray | null;
+    if ((m = SS_YM.exec(tok))) {
+      if (haveYm || haveDay || haveClock) {
+        throw new UnsupportedValueError(`Misordered or repeated year-month in sql_standard interval "${raw}".`);
+      }
+      const sign = m[1] === "-" ? -1 : 1;
+      years = sign * parseInt(m[2] as string, 10);
+      months = sign * parseInt(m[3] as string, 10);
+      haveYm = true;
+    } else if ((m = SS_CLOCK.exec(tok))) {
+      if (haveClock) throw new UnsupportedValueError(`Repeated clock in sql_standard interval "${raw}".`);
+      // An unsigned clock inherits the preceding day's sign; an explicit sign wins.
+      const explicit = m[1] === "+" || m[1] === "-";
+      const sign = explicit ? (m[1] === "-" ? -1 : 1) : haveDay ? daySign : 1;
+      hours = sign * parseInt(m[2] as string, 10);
+      minutes = sign * parseInt(m[3] as string, 10);
+      seconds = sign * parseInt(m[4] as string, 10);
+      fracDigits = m[5] ?? "";
+      fracSign = sign;
+      haveClock = true;
+    } else if ((m = SS_DAY.exec(tok))) {
+      if (haveDay || haveClock) {
+        throw new UnsupportedValueError(`Misordered or repeated day in sql_standard interval "${raw}".`);
+      }
+      daySign = m[1] === "-" ? -1 : 1;
+      days = daySign * parseInt(m[2] as string, 10);
+      haveDay = true;
+    } else {
+      throw new UnsupportedValueError(`Unrecognized token "${tok}" in sql_standard interval "${raw}".`);
+    }
+  }
+
+  if (!haveYm && !haveDay && !haveClock) {
+    throw new UnsupportedValueError(`Unparseable sql_standard interval: "${raw}" (no duration fields).`);
+  }
+
+  const frac = splitFraction(fracDigits, fracSign);
+  return { years, months, days, hours, minutes, seconds, ...frac };
+}
+
 /** Enforce the uniform-sign invariant and build the Duration. */
 function finalize(fields: Fields, sourceText: string): Temporal.Duration {
   let sign = 0;
@@ -277,17 +372,23 @@ function finalize(fields: Fields, sourceText: string): Temporal.Duration {
 /**
  * Decode a Postgres `interval` string to a `Temporal.Duration`.
  *
- * Supports the default `postgres` style (`1 year 2 mons 3 days 04:05:06`),
- * `postgres_verbose` (`@ 1 year 2 mons 3 days 4 hours 5 mins 6 secs [ago]`),
- * and `iso_8601` (`P1Y2M3DT4H5M6S`, incl. per-field-sign negatives). Weeks are
- * folded into days.
+ * Supports **every** `IntervalStyle` Postgres can emit: the default `postgres`
+ * style (`1 year 2 mons 3 days 04:05:06`), `postgres_verbose`
+ * (`@ 1 year 2 mons 3 days 4 hours 5 mins 6 secs [ago]`), `iso_8601`
+ * (`P1Y2M3DT4H5M6S`, incl. per-field-sign negatives), and `sql_standard`
+ * (`+1-2 +3 +4:05:06`, incl. its bare `0` for a zero interval). Weeks are folded
+ * into days.
  *
  * @throws {MixedSignIntervalError} when field signs differ (not representable).
  * @throws {UnsupportedValueError} when the string cannot be parsed.
  */
 export function decodeDuration(text: string): Temporal.Duration {
   const raw = text.trim();
-  const fields = /^[+-]?P/i.test(raw) ? parseIso(raw) : parsePostgres(raw);
+  let fields: Fields;
+  if (raw === "0") fields = ZERO_FIELDS; // `sql_standard` renders a zero interval as bare `0`.
+  else if (/^[+-]?P/i.test(raw)) fields = parseIso(raw);
+  else if (isSqlStandard(raw)) fields = parseSqlStandard(raw);
+  else fields = parsePostgres(raw);
   return finalize(fields, text);
 }
 

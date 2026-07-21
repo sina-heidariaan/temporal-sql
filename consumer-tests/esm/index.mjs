@@ -9,6 +9,7 @@ import { decodeDuration, encodeDuration, decodeInstant, UnsupportedValueError } 
 import { registerTypeParsers, registerPassthrough, encode } from "temporal-sql/pg";
 import { temporalTypes } from "temporal-sql/postgres-js";
 import { interval as drizzleInterval } from "temporal-sql/drizzle";
+import { assertTemporalSqlSession, configureTemporalSqlSession } from "temporal-sql/session";
 
 // Root export: execute a codec end to end.
 const d = decodeDuration("1 year 2 mons 3 days 04:05:06");
@@ -31,5 +32,20 @@ assert.equal(typeof registerPassthrough, "function");
 assert.equal(typeof encode.duration, "function");
 assert.equal(temporalTypes.duration.parse("3 days").days, 3);
 assert.equal(typeof drizzleInterval, "function");
+
+// sql_standard is decodable from the root export (v0.2.0).
+assert.equal(decodeDuration("+1-2 +3 +4:05:06").months, 2);
+assert.equal(decodeDuration("0").toString(), "PT0S");
+
+// Session subpath: assert against a fake query function.
+const fakeQuery = async (t) =>
+  /DateStyle/i.test(t)
+    ? { rows: [{ DateStyle: "ISO, MDY" }] }
+    : /IntervalStyle/i.test(t)
+      ? { rows: [{ IntervalStyle: "iso_8601" }] }
+      : { rows: [{ TimeZone: "UTC" }] };
+const diag = await assertTemporalSqlSession(fakeQuery);
+assert.equal(diag.intervalStyle, "iso_8601");
+assert.equal(typeof configureTemporalSqlSession, "function");
 
 console.log("esm consumer OK");

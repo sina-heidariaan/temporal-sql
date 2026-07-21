@@ -10,6 +10,7 @@ const { decodeDuration, encodeDuration, decodeInstant, UnsupportedValueError } =
 const { registerTypeParsers, registerPassthrough, encode } = require("temporal-sql/pg");
 const { temporalTypes } = require("temporal-sql/postgres-js");
 const { interval: drizzleInterval } = require("temporal-sql/drizzle");
+const { assertTemporalSqlSession, configureTemporalSqlSession } = require("temporal-sql/session");
 
 // Root export: execute a codec end to end.
 const d = decodeDuration("1 year 2 mons 3 days 04:05:06");
@@ -33,4 +34,20 @@ assert.equal(typeof encode.duration, "function");
 assert.equal(temporalTypes.duration.parse("3 days").days, 3);
 assert.equal(typeof drizzleInterval, "function");
 
-console.log("commonjs consumer OK");
+// sql_standard is decodable from the root export (v0.2.0).
+assert.equal(decodeDuration("+1-2 +3 +4:05:06").months, 2);
+assert.equal(decodeDuration("0").toString(), "PT0S");
+
+// Session subpath resolves and runs.
+assert.equal(typeof assertTemporalSqlSession, "function");
+assert.equal(typeof configureTemporalSqlSession, "function");
+const fakeQuery = async (t) =>
+  /DateStyle/i.test(t)
+    ? { rows: [{ DateStyle: "ISO, MDY" }] }
+    : /IntervalStyle/i.test(t)
+      ? { rows: [{ IntervalStyle: "iso_8601" }] }
+      : { rows: [{ TimeZone: "UTC" }] };
+assertTemporalSqlSession(fakeQuery).then((diag) => {
+  assert.equal(diag.intervalStyle, "iso_8601");
+  console.log("commonjs consumer OK");
+});

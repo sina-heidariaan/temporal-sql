@@ -1,6 +1,6 @@
 {
   "name": "temporal-sql",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Postgres-first codecs mapping SQL date/time types to TC39 Temporal (timestamptz, timestamp, date, time, timetz, interval) for pg, postgres.js, Drizzle and Prisma — with correct interval⇄Duration and surfaced µs↔ns precision. No JS Date.",
   "type": "module",
   "license": "MIT",
@@ -86,6 +86,16 @@
       "require": {
         "types": "./dist/prisma.d.cts",
         "default": "./dist/prisma.cjs"
+      }
+    },
+    "./session": {
+      "import": {
+        "types": "./dist/session.d.ts",
+        "default": "./dist/session.js"
+      },
+      "require": {
+        "types": "./dist/session.d.cts",
+        "default": "./dist/session.cjs"
       }
     }
   },

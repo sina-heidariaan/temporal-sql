@@ -88,10 +88,89 @@ describe("decodeDuration — other styles", () => {
   });
 });
 
-describe("decodeDuration — sql_standard rejection", () => {
-  it("throws rather than silently misparsing sql_standard year-month", () => {
-    expect(() => decodeDuration("+1-2 +3 +4:05:06")).toThrow(/sql_standard/);
-    expect(() => decodeDuration("-1-2")).toThrow(/sql_standard/);
+describe("decodeDuration — sql_standard style", () => {
+  it("full interval with all three tokens", () => {
+    const d = decodeDuration("+1-2 +3 +4:05:06");
+    expect([d.years, d.months, d.days, d.hours, d.minutes, d.seconds]).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("year-month-only token", () => {
+    const d = decodeDuration("1-2");
+    expect([d.years, d.months, d.days]).toEqual([1, 2, 0]);
+  });
+
+  it("negative year-month applies the sign to both fields", () => {
+    const d = decodeDuration("-1-2");
+    expect([d.years, d.months]).toEqual([-1, -2]);
+    expect(d.sign).toBe(-1);
+  });
+
+  it("day-time-only (bare day integer next to a clock)", () => {
+    const d = decodeDuration("3 4:05:06");
+    expect([d.years, d.days, d.hours, d.minutes, d.seconds]).toEqual([0, 3, 4, 5, 6]);
+  });
+
+  it("all-negative interval (explicit clock sign, as PG emits with a year-month)", () => {
+    const d = decodeDuration("-1-2 -3 -4:05:06");
+    expect(d.sign).toBe(-1);
+    expect([d.years, d.days, d.hours, d.seconds]).toEqual([-1, -3, -4, -6]);
+  });
+
+  it("unsigned clock inherits the day's sign (PG's same-sign day-time form)", () => {
+    // Verified against PG 16: `-3 days -4:05:06` renders as `-3 4:05:06`, and the
+    // unsigned clock is negative — not a mixed-sign +4:05:06.
+    const d = decodeDuration("-3 4:05:06");
+    expect([d.days, d.hours, d.minutes, d.seconds]).toEqual([-3, -4, -5, -6]);
+    expect(d.sign).toBe(-1);
+  });
+
+  it("unsigned positive day-time stays positive", () => {
+    const d = decodeDuration("3 4:05:06");
+    expect([d.days, d.hours, d.minutes, d.seconds]).toEqual([3, 4, 5, 6]);
+  });
+
+  it("genuinely mixed day-time (PG's forced +0-0 explicit-sign form) throws", () => {
+    // `3 days -4:05:06` → PG renders `+0-0 +3 -4:05:06`; not representable.
+    expect(() => decodeDuration("+0-0 +3 -4:05:06")).toThrow(MixedSignIntervalError);
+  });
+
+  it("fractional seconds on the clock", () => {
+    const d = decodeDuration("+0-0 +0 +0:00:01.5");
+    expect(d.seconds).toBe(1);
+    expect(d.milliseconds).toBe(500);
+  });
+
+  it("bare 0 (the zero interval) decodes to a zero Duration", () => {
+    const d = decodeDuration("0");
+    expect(d.sign).toBe(0);
+    expect(d.toString()).toBe("PT0S");
+  });
+
+  it("mixed-sign across parts is not representable and throws", () => {
+    expect(() => decodeDuration("+1-2 -3 +4:05:06")).toThrow(MixedSignIntervalError);
+  });
+
+  it("year-month + day without a clock", () => {
+    const d = decodeDuration("1-2 3");
+    expect([d.years, d.months, d.days, d.hours]).toEqual([1, 2, 3, 0]);
+  });
+
+  it("decode → encode round-trips to ISO", () => {
+    expect(encodeDuration(decodeDuration("+1-2 +3 +4:05:06"))).toBe("P1Y2M3DT4H5M6S");
+    expect(encodeDuration(decodeDuration("-1-2 -3 -4:05:06"))).toBe("P-1Y-2M-3DT-4H-5M-6S");
+  });
+
+  // Strictness parity with the postgres tokenizer: the fixed order
+  // (year-month, day, clock) is enforced and each kind appears at most once.
+  it.each([
+    ["clock before year-month", "4:05:06 1-2"],
+    ["day before year-month", "3 1-2"],
+    ["duplicate day", "1-2 3 4 5:06:07"],
+    ["duplicate clock", "1-2 4:05:06 5:06:07"],
+    ["unknown trailing token", "1-2 foo"],
+    ["unknown leading token", "foo 1-2"],
+  ])("rejects malformed sql_standard: %s", (_label, input) => {
+    expect(() => decodeDuration(input)).toThrow(UnsupportedValueError);
   });
 });
 
@@ -145,16 +224,12 @@ describe("decodeDuration — strict parsing", () => {
     expect(decodeDuration(input).toString()).toBe(expected);
   });
 
-  it("does not accept a bare 0 outside the verbose form", () => {
-    expect(() => decodeDuration("0")).toThrow(UnsupportedValueError);
+  it("accepts a bare 0 as the zero interval (sql_standard emits this)", () => {
+    expect(decodeDuration("0").toString()).toBe("PT0S");
   });
 
   it("folds a weeks field into days", () => {
     expect(decodeDuration("2 weeks 1 day").days).toBe(15);
-  });
-
-  it("reports sql_standard with its own message, not the generic one", () => {
-    expect(() => decodeDuration("+1-2 +3 +4:05:06")).toThrow(/sql_standard/);
   });
 
   it('"-P-3D" cancels signs to P3D rather than throwing', () => {

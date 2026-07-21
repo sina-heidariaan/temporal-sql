@@ -18,6 +18,12 @@ import {
 import { registerTypeParsers, encode, type RegisterOptions } from "temporal-sql/pg";
 import { temporalTypes, makeTemporalTypes } from "temporal-sql/postgres-js";
 import { interval, timestamptz } from "temporal-sql/drizzle";
+import {
+  assertTemporalSqlSession,
+  configureTemporalSqlSession,
+  type SessionQuery,
+  type SessionDiagnostic,
+} from "temporal-sql/session";
 
 // Inferred return types must be the real Temporal types, not `any`.
 const duration = decodeDuration("3 days");
@@ -64,6 +70,11 @@ const fromOids: number[] = temporalTypes.duration.from;
 const intervalColumn = interval();
 const timestamptzColumn = timestamptz(opts);
 
+// Session subpath: the query function and returned diagnostic are typed.
+const sessionQuery: SessionQuery = async () => ({ rows: [{ DateStyle: "ISO, MDY" }] });
+const sessionDiag: Promise<SessionDiagnostic> = assertTemporalSqlSession(sessionQuery);
+const configured2: Promise<SessionDiagnostic> = configureTemporalSqlSession(sessionQuery, { intervalStyle: "iso_8601" });
+
 export type Check = typeof days &
   typeof iso &
   typeof epoch &
@@ -74,4 +85,4 @@ export type Check = typeof days &
   typeof encodedViaPg &
   typeof serialized &
   typeof configuredOid;
-export { errors, parsed, fromOids, intervalColumn, timestamptzColumn };
+export { errors, parsed, fromOids, intervalColumn, timestamptzColumn, sessionDiag, configured2 };
