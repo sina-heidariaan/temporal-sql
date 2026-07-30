@@ -15,5 +15,17 @@ const err: RangeError = new codecs.UnsupportedValueError("x");
 const encoded: string = pgAdapter.encode.duration(duration);
 pgAdapter.registerTypeParsers();
 
-export type Check = typeof days & typeof iso & typeof intervalOid & typeof encoded;
-export { err };
+// Arrays and the per-pool parser table must resolve through the CJS types too.
+const arrayLiteral: string = codecs.formatPgArray(codecs.parsePgArray('{"1 day",NULL}'));
+const arrayOid: number = codecs.OID.intervalArray;
+const encodedArray: string = pgAdapter.encode.durationArray([duration, null]);
+const scopedTypes: pgAdapter.PgTypeOverrides = pgAdapter.makePgTypes({ mode: "passthrough" });
+
+export type Check = typeof days &
+  typeof iso &
+  typeof intervalOid &
+  typeof encoded &
+  typeof arrayLiteral &
+  typeof arrayOid &
+  typeof encodedArray;
+export { err, scopedTypes };

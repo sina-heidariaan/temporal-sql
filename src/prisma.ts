@@ -23,6 +23,14 @@ const DECODERS = {
   plainTime: codecs.decodePlainTime,
   timetz: codecs.decodeTimetz,
   duration: codecs.decodeDuration,
+  // Array columns, cast to `::text` like the scalar ones. Elements may be SQL
+  // NULL, so these produce `(T | null)[]`.
+  instantArray: (v: string) => codecs.decodePgArray(v, codecs.decodeInstant),
+  plainDateTimeArray: (v: string) => codecs.decodePgArray(v, codecs.decodePlainDateTime),
+  plainDateArray: (v: string) => codecs.decodePgArray(v, codecs.decodePlainDate),
+  plainTimeArray: (v: string) => codecs.decodePgArray(v, codecs.decodePlainTime),
+  timetzArray: (v: string) => codecs.decodePgArray(v, codecs.decodeTimetz),
+  durationArray: (v: string) => codecs.decodePgArray(v, codecs.decodeDuration),
 } as const;
 
 /** Name of a decoder in {@link DECODERS}. */

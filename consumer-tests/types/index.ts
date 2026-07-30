@@ -12,12 +12,27 @@ import {
   MixedSignIntervalError,
   PrecisionError,
   OID,
+  parsePgArray,
+  formatPgArray,
+  decodePgArray,
+  encodePgArray,
+  decodeZonedDateTimeArray,
+  encodeZonedDateTimeArray,
   type EncodeOptions,
   type TimeWithOffset,
+  type PgArrayElement,
 } from "temporal-sql";
-import { registerTypeParsers, encode, type RegisterOptions } from "temporal-sql/pg";
+import {
+  registerTypeParsers,
+  makePgTypes,
+  encode,
+  type RegisterOptions,
+  type PgTypeOverrides,
+  type PgTypesMode,
+  type RestoreTypeParsers,
+} from "temporal-sql/pg";
 import { temporalTypes, makeTemporalTypes } from "temporal-sql/postgres-js";
-import { interval, timestamptz } from "temporal-sql/drizzle";
+import { interval, timestamptz, intervalArray, timestamptzArray } from "temporal-sql/drizzle";
 import {
   assertTemporalSqlSession,
   configureTemporalSqlSession,
@@ -69,6 +84,31 @@ const fromOids: number[] = temporalTypes.duration.from;
 // Drizzle column factories return callable builders.
 const intervalColumn = interval();
 const timestamptzColumn = timestamptz(opts);
+const intervalArrayColumn = intervalArray();
+const timestamptzArrayColumn = timestamptzArray(opts);
+
+// Arrays: the grammar helpers and the typed element mapping.
+const elements: PgArrayElement[] = parsePgArray('{"1 day",NULL}');
+const literal: string = formatPgArray(elements);
+// A Postgres array may hold SQL NULL, so decoding must widen the element type.
+const decodedSpans: (ReturnType<typeof decodeDuration> | null)[] = decodePgArray("{}", decodeDuration);
+const encodedSpans: string = encodePgArray([duration, null], (v) => encodeDuration(v));
+
+// `encode.*Array` accept nulls alongside values and return array-literal text.
+const encodedArray: string = encode.durationArray([duration, null], opts);
+
+// Per-pool parser table.
+const mode: PgTypesMode = "passthrough";
+const scopedTypes: PgTypeOverrides = makePgTypes({ mode });
+const scopedParser: (value: string) => unknown = scopedTypes.getTypeParser(OID.intervalArray, "text");
+
+// Registration is reversible; the undo is typed.
+const restore: RestoreTypeParsers = registerTypeParsers();
+restore();
+
+// ZonedDateTime arrays need a caller-supplied zone, like the scalar helpers.
+const zonedList = decodeZonedDateTimeArray('{"2024-01-01 00:00:00+00"}', "Europe/Berlin");
+const zonedText: string = encodeZonedDateTimeArray(zonedList);
 
 // Session subpath: the query function and returned diagnostic are typed.
 const sessionQuery: SessionQuery = async () => ({ rows: [{ DateStyle: "ISO, MDY" }] });
@@ -84,5 +124,24 @@ export type Check = typeof days &
   typeof intervalOid &
   typeof encodedViaPg &
   typeof serialized &
-  typeof configuredOid;
-export { errors, parsed, fromOids, intervalColumn, timestamptzColumn, sessionDiag, configured2 };
+  typeof configuredOid &
+  typeof literal &
+  typeof encodedSpans &
+  typeof encodedArray &
+  typeof zonedText;
+export {
+  errors,
+  parsed,
+  fromOids,
+  intervalColumn,
+  timestamptzColumn,
+  intervalArrayColumn,
+  timestamptzArrayColumn,
+  sessionDiag,
+  configured2,
+  elements,
+  decodedSpans,
+  scopedTypes,
+  scopedParser,
+  zonedList,
+};

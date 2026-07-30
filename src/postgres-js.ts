@@ -9,6 +9,10 @@
  *   import { temporalTypes } from "temporal-sql/postgres-js";
  *   const sql = postgres(url, { types: temporalTypes });
  *   await sql`insert into t (at) values (${ sql.typed.instant(myInstant) })`;
+ *
+ * Each type has an `*Array` sibling for the matching Postgres array type, e.g.
+ * `sql.typed.instantArray([a, b])` for `timestamptz[]`. Array elements may be
+ * `null`, so an array decodes to `(T | null)[]`.
  */
 import type { Temporal } from "@js-temporal/polyfill";
 import { OID } from "./oids.js";
@@ -64,7 +68,35 @@ export function makeTemporalTypes(opts?: EncodeOptions) {
     serialize: (v) => C.encodeDuration(v, opts),
     parse: C.decodeDuration,
   };
-  return { instant, plainDateTime, plainDate, plainTime, timetz, duration };
+
+  // Array variants. postgres.js can derive an array parser for a registered
+  // scalar type by querying pg_catalog, but only for array OIDs that have no
+  // handler yet — registering these explicitly keeps the behaviour deterministic
+  // and independent of the `fetch_types` round trip.
+  const array = <T>(
+    scalar: PostgresType<T>,
+    arrayOid: number,
+  ): PostgresType<readonly (T | null)[]> => ({
+    to: arrayOid,
+    from: [arrayOid],
+    serialize: (v) => C.encodePgArray(v, scalar.serialize),
+    parse: (raw) => C.decodePgArray(raw, scalar.parse),
+  });
+
+  return {
+    instant,
+    plainDateTime,
+    plainDate,
+    plainTime,
+    timetz,
+    duration,
+    instantArray: array(instant, OID.timestamptzArray),
+    plainDateTimeArray: array(plainDateTime, OID.timestampArray),
+    plainDateArray: array(plainDate, OID.dateArray),
+    plainTimeArray: array(plainTime, OID.timeArray),
+    timetzArray: array(timetz, OID.timetzArray),
+    durationArray: array(duration, OID.intervalArray),
+  };
 }
 
 /** Default type map (precision `throw` mode). Use {@link makeTemporalTypes} to configure. */

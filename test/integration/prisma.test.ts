@@ -28,7 +28,9 @@ d("prisma (@prisma/adapter-pg) round-trip", () => {
     const adapter = new PrismaPg(pool);
     prisma = new PrismaClient({ adapter }) as unknown as typeof prisma;
     await prisma.$executeRawUnsafe(`drop table if exists prisma_probe`);
-    await prisma.$executeRawUnsafe(`create table prisma_probe (at timestamptz, span interval, day date)`);
+    await prisma.$executeRawUnsafe(
+      `create table prisma_probe (at timestamptz, span interval, day date, spans interval[])`,
+    );
   });
   afterAll(async () => {
     await prisma.$executeRawUnsafe(`drop table if exists prisma_probe`).catch(() => {});
@@ -63,6 +65,25 @@ d("prisma (@prisma/adapter-pg) round-trip", () => {
     expect(mapped.day.toString()).toBe(day.toString());
     expect(mapped.span.total({ unit: "microseconds", relativeTo: REL })).toBe(
       span.total({ unit: "microseconds", relativeTo: REL }),
+    );
+  });
+
+  it("writes and reads an array column through decodeRow", async () => {
+    const spans = [Temporal.Duration.from("P1Y2M3DT4H5M6.789012S"), null];
+    await prisma.$executeRawUnsafe(`delete from prisma_probe`);
+    await prisma.$executeRawUnsafe(
+      `insert into prisma_probe (spans) values ($1::interval[])`,
+      codecs.encodePgArray(spans, (v) => codecs.encodeDuration(v)),
+    );
+
+    const rows = (await prisma.$queryRawUnsafe(`select spans::text from prisma_probe`)) as Array<
+      Record<string, unknown>
+    >;
+    const mapped = decodeRow<{ spans: (Temporal.Duration | null)[] }>(rows[0]!, { spans: "durationArray" });
+
+    expect(mapped.spans[1]).toBeNull();
+    expect(mapped.spans[0]!.total({ unit: "microseconds", relativeTo: REL })).toBe(
+      spans[0]!.total({ unit: "microseconds", relativeTo: REL }),
     );
   });
 });

@@ -9,6 +9,7 @@
 import type { Temporal } from "@js-temporal/polyfill";
 import { TEMPORAL_CTORS } from "temporal-gregorian/reflect";
 import { guardSubMicrosecond, rejectInfinity, splitOffset, UnsupportedValueError, type EncodeOptions } from "./shared.js";
+import { decodePgArray, encodePgArray } from "./array.js";
 
 function rejectBC(text: string, t: string): void {
   if (/\bBC\b/i.test(t)) {
@@ -44,4 +45,22 @@ export function decodeZonedDateTime(text: string, timeZone: string): Temporal.Zo
 /** Encode a `ZonedDateTime` by reducing to its underlying instant. */
 export function encodeZonedDateTime(value: Temporal.ZonedDateTime, opts?: EncodeOptions): string {
   return encodeInstant(value.toInstant(), opts);
+}
+
+/**
+ * Decode a `timestamptz[]` literal into `ZonedDateTime`s projected onto
+ * `timeZone`. The array counterpart of {@link decodeZonedDateTime}; like it, this
+ * cannot be registered against an OID because the zone is the caller's choice.
+ * SQL `NULL` elements stay `null`.
+ */
+export function decodeZonedDateTimeArray(text: string, timeZone: string): (Temporal.ZonedDateTime | null)[] {
+  return decodePgArray(text, (element) => decodeZonedDateTime(element, timeZone));
+}
+
+/** Encode `ZonedDateTime`s as a `timestamptz[]` literal. Accepts `null` elements. */
+export function encodeZonedDateTimeArray(
+  values: readonly (Temporal.ZonedDateTime | null)[],
+  opts?: EncodeOptions,
+): string {
+  return encodePgArray(values, (value) => encodeZonedDateTime(value, opts));
 }

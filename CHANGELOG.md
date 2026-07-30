@@ -3,6 +3,104 @@
 All notable changes to `temporal-sql` are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-07-30
+
+Finishes array support. The six array OIDs have been defined in `src/oids.ts`
+since 0.1.0 but no adapter registered them, so a `timestamptz[]` column still came
+back as JS `Date` objects. All six now decode to Temporal values on every driver.
+Also adds a way to decode without mutating `pg` globally.
+
+### Added
+
+- **Array codecs for all six types** — `timestamptz[]`, `timestamp[]`, `date[]`,
+  `time[]`, `timetz[]`, `interval[]`. Elements run through the existing scalar
+  codecs, so precision behaviour and `IntervalStyle` support are identical to the
+  scalar path.
+  - `pg` — the array OIDs are registered by the same `registerTypeParsers()` /
+    `registerPassthrough()` calls as the scalars. Six new writers:
+    `encode.instantArray`, `plainDateTimeArray`, `plainDateArray`,
+    `plainTimeArray`, `timetzArray`, `durationArray`.
+  - `postgres.js` — six new entries on `temporalTypes` / `makeTemporalTypes`:
+    `instantArray`, `plainDateTimeArray`, `plainDateArray`, `plainTimeArray`,
+    `timetzArray`, `durationArray`. Registered explicitly rather than relying on
+    postgres.js deriving them from `pg_catalog`, so behaviour does not depend on
+    a `fetch_types` round trip.
+  - Drizzle — six new column factories: `timestamptzArray`, `timestampArray`,
+    `dateArray`, `timeArray`, `timetzArray`, `intervalArray`.
+  - Prisma — six new `decodeRow` decoder names, e.g. `{ spans: "durationArray" }`.
+- **A real Postgres array parser**, exported from the root: `parsePgArray`,
+  `formatPgArray`, `decodePgArray`, `encodePgArray`, `type PgArrayElement`.
+  Handles quoting, backslash escapes, embedded commas and braces, the unquoted
+  `NULL` token versus quoted `"NULL"`, empty arrays, the `[0:2]=` dimension
+  prefix, and nesting. Vendored, not a dependency: `dependencies` is unchanged
+  and the code stays statically analysable for bundlers.
+- **`makePgTypes(opts?)` in `temporal-sql/pg`** — returns a `{ getTypeParser }`
+  object for `new pg.Pool({ types })`, so decoding is scoped to one pool instead
+  of mutating pg's process-wide table. `mode: "passthrough"` mirrors
+  `registerPassthrough`. Any OID outside the date/time family falls through to
+  pg's own parser. It composes with a global `registerPassthrough()`, so an app
+  can use Drizzle and its own pg pools side by side.
+- **Reversible registration.** `registerTypeParsers()` and `registerPassthrough()`
+  now return a `restore()` function that puts pg's previous parsers back. Calling
+  it twice is a no-op. Previously they returned `void`, so this is additive.
+- **`decodeZonedDateTimeArray(text, timeZone)` / `encodeZonedDateTimeArray(values)`**
+  — the array counterparts of the `ZonedDateTime` helpers. Like the scalar ones
+  they cannot be OID-registered, because the zone is the caller's choice.
+  `encode.zonedDateTimeArray` is the `pg` alias.
+- **A named diagnostic when the driver already parsed the column.** Passing a
+  non-string to `parsePgArray` / `decodePgArray` now throws an error that names
+  `registerPassthrough()` as the fix, instead of a bare "expected '{'".
+
+### Changed
+
+- **CI now runs Postgres 18.4** instead of 16. The full suite passes on both.
+- `registerTypeParsers()` and `registerPassthrough()` now cover 12 OIDs instead
+  of 6. Their signatures and existing behaviour are unchanged.
+
+### Verified
+
+Against **Postgres 18.4**, 255 tests, unit and integration:
+
+- All six array types round-trip on **pg**, **postgres.js**, **Drizzle** and
+  **Prisma**, to microsecond precision, asserted by exact value.
+- Edge cases: SQL `NULL` elements, empty `{}` arrays, a NULL column (distinct from
+  an empty array), BC years in `date[]`, per-element offsets in `timetz[]`, a
+  1000-element array, and the `[2:4]=` dimension prefix Postgres emits for a
+  non-1 lower bound.
+- `interval[]` decodes under **all four `IntervalStyle`s** — `iso_8601` emits bare
+  elements, the other three emit quoted ones, and both paths are covered.
+- Failures surface correctly *from inside* an array: `infinity` raises
+  `UnsupportedValueError`, a mixed-sign interval raises `MixedSignIntervalError`,
+  and a multidimensional array names the limitation.
+- Drizzle covers all six array columns, including `time[]` and `timetz[]` — the
+  OIDs no Drizzle version passes through, so they are the sharpest check that the
+  documented `registerPassthrough()` setup is correct.
+- The array grammar has 81 unit tests: quoting, escapes, unicode, embedded
+  newlines, three-level nesting, a 10,000-element array, and 20 malformed inputs
+  that must throw rather than return a partial array.
+- A new `test/root-purity.test.ts` pins the acceptance criterion that importing
+  the root export or any adapter subpath registers nothing with `pg`.
+
+### Known limitations
+
+- **`makePgTypes` does not work with Drizzle.** `drizzle-orm/node-postgres`
+  attaches its own `types` object to every query, which overrides the pool's. It
+  passes through a hard-coded OID list and routes everything else to pg's
+  **global** table, so a pool-scoped table is never consulted. The list differs by
+  version — 0.36 covers four scalars, 0.45 adds four array OIDs — but `time`,
+  `timetz`, `time[]` and `timetz[]` are on neither. Drizzle therefore requires
+  `registerPassthrough()` at every version. You can still use `makePgTypes` for
+  your own non-Drizzle pools in the same process. Pinned by
+  `test/integration/pg-scoped-types.test.ts`.
+- **Drizzle's newer codec API was not used.** It ships only in `drizzle-orm@1.x`,
+  which is still beta (`1.0.0-beta.24`); `latest` is 0.45.2. The `customType`
+  factories here work on every version from the declared floor (0.30) to 0.45.2,
+  both exercised by the consumer gate.
+- **Multidimensional arrays are not supported by the typed codecs.** Reading one
+  throws `UnsupportedValueError` naming the limitation rather than mis-mapping it.
+  `parsePgArray` does return the nesting for callers who want to walk it.
+- An encoder error on one element (e.g. `PrecisionError`) aborts the whole array.
+
 ## [0.2.0] — 2026-07-22
 
 Completes `IntervalStyle` coverage and adds session-compatibility helpers.
@@ -172,10 +270,12 @@ Temporal, with adapters for `pg`, `postgres.js`, Drizzle, and Prisma. No JS
 
 ### Known limitations
 
-- Postgres only (no MySQL/SQLite yet); array types not wired; `timetz` returns a
-  struct rather than a Temporal type; Drizzle requires `registerPassthrough()`
-  (mutates pg's global type-parser state). See the README caveats section.
+- Postgres only (no MySQL/SQLite yet); array types not wired (fixed in 0.3.0);
+  `timetz` returns a struct rather than a Temporal type; Drizzle requires
+  `registerPassthrough()` (mutates pg's global type-parser state). See the README
+  caveats section.
 
+[0.3.0]: https://github.com/sina-heidariaan/temporal-sql/releases/tag/v0.3.0
 [0.2.0]: https://github.com/sina-heidariaan/temporal-sql/releases/tag/v0.2.0
 [0.1.2]: https://github.com/sina-heidariaan/temporal-sql/releases/tag/v0.1.2
 [0.1.1]: https://github.com/sina-heidariaan/temporal-sql/releases/tag/v0.1.1

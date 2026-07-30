@@ -5,10 +5,18 @@
  * executes. Anything this file can do, a consumer can do.
  */
 import assert from "node:assert/strict";
-import { decodeDuration, encodeDuration, decodeInstant, UnsupportedValueError } from "temporal-sql";
-import { registerTypeParsers, registerPassthrough, encode } from "temporal-sql/pg";
+import {
+  decodeDuration,
+  encodeDuration,
+  decodeInstant,
+  parsePgArray,
+  formatPgArray,
+  decodePgArray,
+  UnsupportedValueError,
+} from "temporal-sql";
+import { registerTypeParsers, registerPassthrough, encode, makePgTypes } from "temporal-sql/pg";
 import { temporalTypes } from "temporal-sql/postgres-js";
-import { interval as drizzleInterval } from "temporal-sql/drizzle";
+import { interval as drizzleInterval, intervalArray as drizzleIntervalArray } from "temporal-sql/drizzle";
 import { assertTemporalSqlSession, configureTemporalSqlSession } from "temporal-sql/session";
 
 // Root export: execute a codec end to end.
@@ -36,6 +44,32 @@ assert.equal(typeof drizzleInterval, "function");
 // sql_standard is decodable from the root export (v0.2.0).
 assert.equal(decodeDuration("+1-2 +3 +4:05:06").months, 2);
 assert.equal(decodeDuration("0").toString(), "PT0S");
+
+// Arrays (v0.3.0): the grammar, the codecs, and the adapter surface.
+assert.deepEqual(parsePgArray('{"1 day",NULL,"a,b"}'), ["1 day", null, "a,b"]);
+assert.equal(formatPgArray(["a", null]), '{"a",NULL}');
+const spans = decodePgArray('{"1 day",NULL}', decodeDuration);
+assert.equal(spans[0].days, 1);
+assert.equal(spans[1], null);
+assert.equal(encode.durationArray([d, null]), '{"P1Y2M3DT4H5M6S",NULL}');
+assert.equal(temporalTypes.durationArray.parse('{"3 days"}')[0].days, 3);
+assert.equal(typeof drizzleIntervalArray, "function");
+assert.ok(drizzleIntervalArray()("spans"));
+
+// makePgTypes scopes decoding to one pool instead of mutating pg globally.
+const scopedTypes = makePgTypes();
+assert.equal(scopedTypes.getTypeParser(1186)("3 days").days, 3);
+assert.equal(makePgTypes({ mode: "passthrough" }).getTypeParser(1186)("3 days"), "3 days");
+
+// A non-string reaching the parser names the fix instead of "malformed literal".
+assert.throws(() => parsePgArray([new Date()]), /registerPassthrough/);
+
+// Registration is reversible.
+const seen = new Map();
+const restore = registerPassthrough({ setTypeParser: (oid, fn) => seen.set(oid, fn) });
+assert.equal(seen.size, 12);
+assert.equal(typeof restore, "function");
+restore();
 
 // Session subpath: assert against a fake query function.
 const fakeQuery = async (t) =>

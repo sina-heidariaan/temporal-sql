@@ -9,7 +9,7 @@
 [![license](https://img.shields.io/npm/l/temporal-sql.svg)](./LICENSE)
 
 **Status: early release (v0.x).** Postgres-first. Round-trip tested to
-microsecond precision against Postgres 16 on `pg`, `postgres.js`, Drizzle, and
+microsecond precision against Postgres 18 on `pg`, `postgres.js`, Drizzle, and
 Prisma (`@prisma/adapter-pg`).
 
 ```bash
@@ -108,6 +108,10 @@ Decode is always lossless to microseconds.
 | `timetz` | `{ time: PlainTime, offset }` | Temporal has no time+offset type; a struct avoids silent offset loss. |
 | `interval` | `Temporal.Duration` | Mixed-sign intervals throw rather than corrupt. |
 
+Every one of these has an **array** form too — `timestamptz[]`, `timestamp[]`,
+`date[]`, `time[]`, `timetz[]`, `interval[]` — decoding to `(T | null)[]`. See
+[Arrays](#arrays).
+
 ---
 
 ## Before / after
@@ -142,6 +146,20 @@ await pool.query("insert into events (at) values ($1)", [
 `pg` has no serializer registry, so encode values explicitly with `encode.*` and
 pass the string as a parameter.
 
+**Without mutating pg globally.** `registerTypeParsers()` changes pg's
+process-wide parser table, which affects every other pg user in the process. To
+confine it to one pool, pass a parser table instead:
+
+```ts
+import { makePgTypes } from "temporal-sql/pg";
+
+const pool = new pg.Pool({ connectionString, types: makePgTypes() });
+// only this pool decodes to Temporal; every other pool is untouched
+```
+
+Any OID outside the date/time family falls through to pg's own parser, unchanged.
+This does **not** work with Drizzle — see the note in the Drizzle section.
+
 ### `postgres.js`
 
 ```ts
@@ -162,14 +180,54 @@ import { registerPassthrough } from "temporal-sql/pg";
 registerPassthrough(); // REQUIRED: hands Drizzle raw text, not a pg Date
 
 export const events = pgTable("events", {
-  at:   t.timestamptz()("at"),
-  span: t.interval({ onSubMicrosecond: "truncate" })("span"),
+  at:    t.timestamptz()("at"),
+  span:  t.interval({ onSubMicrosecond: "truncate" })("span"),
+  spans: t.intervalArray()("spans"),   // interval[]
 });
 ```
 
 > **Why `registerPassthrough()`?** Drizzle's custom columns decode from raw
 > text. Without it, `pg` converts the column to a `Date` first and the point of
 > the package is lost.
+>
+> **`makePgTypes()` cannot replace it here.** `drizzle-orm/node-postgres`
+> attaches its own `types` to every query, overriding the pool's. That object
+> passes through a hard-coded OID list and sends everything else to pg's
+> **global** table, so a pool-scoped table is never consulted. The list grows
+> between Drizzle versions (0.36 covers four scalars; 0.45 adds four array OIDs),
+> but `time`, `timetz`, `time[]` and `timetz[]` are on neither.
+> `registerPassthrough()` is the one lever that reaches the global table.
+>
+> **You can use both at once.** `registerPassthrough()` for Drizzle and
+> `makePgTypes()` on your own non-Drizzle pools compose cleanly — see
+> [Using both together](#using-both-together).
+
+### Using both together
+
+`registerPassthrough()` and `makePgTypes()` are independent levers, so one app can
+use both:
+
+```ts
+registerPassthrough();                                  // global: feeds Drizzle raw text
+const drizzlePool = new pg.Pool({ connectionString }); // uses the global table
+const rawPool = new pg.Pool({ connectionString, types: makePgTypes() });
+```
+
+`rawPool` still returns Temporal values. `makePgTypes` answers for the twelve
+date/time OIDs out of its own table and never consults the global one, so the
+passthrough cannot leak into it.
+
+The one thing to know: a pool with **no** `types` shares the global table, so
+after `registerPassthrough()` it returns raw strings. Give every pool that should
+decode its own `makePgTypes()`, or use `registerTypeParsers()` globally instead.
+
+Both `register*` functions also return an undo:
+
+```ts
+const restore = registerPassthrough();
+// ... later
+restore();   // pg's original parsers are back
+```
 
 ### Prisma (driver-adapter path)
 
@@ -181,6 +239,68 @@ import { codecs, decodeRow } from "temporal-sql/prisma";
 const rows = await prisma.$queryRaw`select id, created_at::text, span::text from events`;
 const mapped = rows.map((r) => decodeRow(r, { created_at: "instant", span: "duration" }));
 ```
+
+---
+
+## Arrays
+
+All six types work as Postgres arrays. Elements go through the same scalar
+codecs, so precision and `interval` handling are identical.
+
+```ts
+// pg — array OIDs are registered by the same call as the scalars
+registerTypeParsers();
+const { rows } = await pool.query("select tags, spans from events");
+const spans: (Temporal.Duration | null)[] = rows[0].spans;
+
+await pool.query("insert into events (spans) values ($1::interval[])", [
+  encode.durationArray([Temporal.Duration.from("P1D"), null]),
+]);
+
+// postgres.js — every type has an `*Array` sibling
+await sql`insert into events (ats) values (${ sql.typed.instantArray([a, b]) })`;
+
+// Drizzle — explicit array column factories
+export const events = pgTable("events", { spans: t.intervalArray()("spans") });
+
+// Prisma — array decoder names
+decodeRow(row, { spans: "durationArray" });
+```
+
+**A Postgres array can contain SQL `NULL`,** so arrays decode to `(T | null)[]`,
+not `T[]`. The distinction between the unquoted token `NULL` and the quoted text
+`"NULL"` is preserved in both directions.
+
+The array grammar is parsed properly — quoting, backslash escapes, embedded
+commas and braces, empty arrays, and the `[0:2]=` dimension prefix. The reader
+and writer are exported if you need them directly:
+
+```ts
+import { parsePgArray, formatPgArray } from "temporal-sql";
+
+parsePgArray('{"1 day",NULL,"a,b"}');   // → ["1 day", null, "a,b"]
+formatPgArray(["a", null]);             // → '{"a",NULL}'
+```
+
+`timestamptz[]` can also be projected onto a zone, the array counterpart of
+`decodeZonedDateTime`:
+
+```ts
+import { decodeZonedDateTimeArray } from "temporal-sql";
+decodeZonedDateTimeArray(text, "Europe/Berlin");   // → (ZonedDateTime | null)[]
+```
+
+If the driver already parsed the column, the error says so and names the fix
+rather than reporting a malformed literal:
+
+```
+Expected Postgres array text but received object. The driver has already parsed
+this column. With Drizzle, call registerPassthrough() from "temporal-sql/pg"…
+```
+
+> **Multidimensional arrays are not supported by the typed codecs.** Reading one
+> throws `UnsupportedValueError` naming the limitation — never a silent
+> mis-parse. `parsePgArray` does return the nesting, so you can walk it yourself.
 
 ---
 
@@ -233,6 +353,11 @@ so run them on the specific pooled connection you query on.
   want the lossy time-only value.
 - **`infinity` / `-infinity`** timestamps have no Temporal value and throw
   `UnsupportedValueError`.
+- **Arrays are one-dimensional only.** A nested array throws
+  `UnsupportedValueError`; use `parsePgArray` to handle nesting yourself.
+- **An error in one array element aborts the whole array.** A `PrecisionError`
+  while encoding element 3 means no array is written — the same all-or-nothing
+  contract the scalar encoders have.
 
 ## License
 

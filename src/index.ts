@@ -17,11 +17,27 @@ export {
 
 export { OID, type Oid } from "./oids.js";
 
+// Postgres array literal ⇄ JS array, shared by every adapter
+export {
+  parsePgArray,
+  formatPgArray,
+  decodePgArray,
+  encodePgArray,
+  type PgArrayElement,
+} from "./array.js";
+
 // interval ⇄ Duration (headline)
 export { decodeDuration, encodeDuration } from "./interval.js";
 
 // timestamptz ⇄ Instant / ZonedDateTime
-export { decodeInstant, encodeInstant, decodeZonedDateTime, encodeZonedDateTime } from "./timestamptz.js";
+export {
+  decodeInstant,
+  encodeInstant,
+  decodeZonedDateTime,
+  encodeZonedDateTime,
+  decodeZonedDateTimeArray,
+  encodeZonedDateTimeArray,
+} from "./timestamptz.js";
 
 // timestamp ⇄ PlainDateTime
 export { decodePlainDateTime, encodePlainDateTime } from "./timestamp.js";
