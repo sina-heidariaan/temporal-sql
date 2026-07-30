@@ -15,11 +15,20 @@
  * tarball's `exports` map — so CI runs it once rather than across the matrix.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
+
+/**
+ * `npm publish --dry-run` exports `npm_config_dry_run=true`, and every nested npm
+ * call inherits it — so when this gate runs from `prepublishOnly`, `npm pack`
+ * would print a filename but write no tarball, and `npx` could refuse to fetch
+ * attw. Scrub it once here; the flag is meaningless for this script's npm calls.
+ */
+delete process.env.npm_config_dry_run;
+
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const npx = process.platform === "win32" ? "npx.cmd" : "npx";
 
@@ -48,14 +57,18 @@ if (nodeMajor < 20) {
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { stdio: "pipe", encoding: "utf8", shell: process.platform === "win32", ...opts });
 
-// 1. Pack the package into a tarball.
-run(npm, ["pack", "--silent"], { cwd: root });
-const tarball = readdirSync(root).find((f) => f.endsWith(".tgz"));
+// 1. Pack the package into a tarball, inside a clean temp dir.
+const clean = mkdtempSync(join(tmpdir(), "attw-"));
+
+// Packing into the temp dir, rather than the repo root, means we never scan for
+// `*.tgz` next to the sources — a stale tarball there used to be picked up and
+// then deleted by this script.
+const packJson = run(npm, ["pack", "--json", "--pack-destination", clean], { cwd: root });
+const tarball = JSON.parse(packJson)[0]?.filename;
 if (!tarball) throw new Error("npm pack produced no tarball");
-const tarballPath = join(root, tarball);
+const tarballPath = join(clean, tarball);
 
 // 2. Run attw against the tarball from a clean directory.
-const clean = mkdtempSync(join(tmpdir(), "attw-"));
 let output = "";
 let failed = false;
 try {
@@ -66,7 +79,6 @@ try {
   output = `${err.stdout ?? ""}${err.stderr ?? ""}`;
   failed = true;
 } finally {
-  rmSync(tarballPath, { force: true });
   rmSync(clean, { recursive: true, force: true });
 }
 

@@ -17,11 +17,19 @@
  *   node scripts/check-consumers.mjs --peers=latest
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
+
+/**
+ * `npm publish --dry-run` exports `npm_config_dry_run=true`, and every nested npm
+ * call inherits it — so when this gate runs from `prepublishOnly`, `npm pack`
+ * would write no tarball and the fixture `npm install`s would install nothing.
+ * Scrub it once here; the flag is meaningless for this script's own npm calls.
+ */
+delete process.env.npm_config_dry_run;
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const shell = process.platform === "win32";
 
@@ -55,12 +63,15 @@ if (requested && !PEER_SETS[requested]) {
 }
 const peerSets = requested ? [requested] : Object.keys(PEER_SETS);
 
-// 1. Pack once; every fixture installs this exact artifact.
+// 1. Pack once, into a temp dir; every fixture installs this exact artifact.
+// Packing outside the repo means we never scan the root for `*.tgz` — a stale
+// tarball there used to be picked up, installed, and then deleted by this script.
 console.log("Packing tarball…");
-run(npm, ["pack", "--silent"], root);
-const tarball = readdirSync(root).find((f) => f.endsWith(".tgz"));
+const packDir = mkdtempSync(join(tmpdir(), "consumer-pack-"));
+const packJson = run(npm, ["pack", "--json", "--pack-destination", packDir], root);
+const tarball = JSON.parse(packJson)[0]?.filename;
 if (!tarball) throw new Error("npm pack produced no tarball");
-const tarballPath = join(root, tarball);
+const tarballPath = join(packDir, tarball);
 
 const failures = [];
 try {
@@ -91,7 +102,7 @@ try {
     }
   }
 } finally {
-  rmSync(tarballPath, { force: true });
+  rmSync(packDir, { recursive: true, force: true });
 }
 
 if (failures.length) {
