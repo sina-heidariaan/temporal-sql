@@ -3,6 +3,63 @@
 All notable changes to `temporal-sql` are documented here. This project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-08-20
+
+Ranges & multiranges, and a doctor. The package's promise is now stated (and
+executed) as: **TC39 Temporal + PostgreSQL correctness without JS `Date`,
+timezone surprises, or silent precision loss** — and its second headline:
+Temporal-native PostgreSQL intervals, timestamps, ranges, and multiranges.
+
+### Added
+
+- **Range codecs** — `daterange` → `TemporalRange<Temporal.PlainDate>`,
+  `tsrange` → `TemporalRange<Temporal.PlainDateTime>`, `tstzrange` →
+  `TemporalRange<Temporal.Instant>`, with bound inclusivity flags, unbounded
+  sides as `null`, and the `empty` range. Multiranges (`datemultirange`,
+  `tsmultirange`, `tstzmultirange`, Postgres 14+) decode as `TemporalRange<T>[]`.
+  - Root exports: `parsePgRange`, `formatPgRange`, `decodePgRange`,
+    `encodePgRange`, `splitPgMultirange`, `decodePgMultirange`,
+    `encodePgMultirange`, `type TemporalRange`, `type RawRange`. Multirange
+    text is not array text (ranges inside `{...}` are bare and contain commas),
+    so it has its own parser — both `\"` and `""` bound-escape styles are read.
+  - `pg` — the six range/multirange OIDs are registered by the same
+    `registerTypeParsers()` / `registerPassthrough()` / `makePgTypes()` calls;
+    six new writers: `encode.plainDateRange`, `plainDateTimeRange`,
+    `instantRange`, `plainDateMultirange`, `plainDateTimeMultirange`,
+    `instantMultirange`.
+  - `postgres.js` — six new entries: `sql.typed.plainDateRange`,
+    `plainDateTimeRange`, `instantRange`, and the `*Multirange` siblings.
+- **`temporal-sql doctor`** — a CLI (`npx temporal-sql doctor --url …`,
+  `--json`, `--markdown`; exit code 0/1 for CI) plus an importable,
+  driver-agnostic engine (`temporal-sql/doctor`: `runDoctor`,
+  `renderDoctorText`, `renderDoctorMarkdown`). Checks session settings,
+  timezone independence of `timestamptz`, microsecond precision through real
+  server round-trips for every scalar type, all four `IntervalStyle`s, server
+  version (multirange availability), the sub-microsecond write guard, and
+  installed driver/ORM versions with their caveats.
+- **Single-call Drizzle columns** — `t.timestamptz("at")`,
+  `t.interval("span", { onSubMicrosecond: "truncate" })`. The two-call form
+  (`t.timestamptz()("at")`) keeps working unchanged.
+- **Compatibility matrix** — `COMPATIBILITY.md`, where every row is executed by
+  a named CI job: Node 18–26, Postgres 14 + 18.4 (new CI matrix), peers at both
+  range bounds, `drizzle-orm@beta` (1.x codec line) as a non-blocking CI job,
+  and a drizzle-zod fixture that reproduces drizzle-orm#5692 and pins the
+  documented override pattern.
+- **Migration guides** — `docs/migrations/`: Date → Temporal for `pg`, Drizzle
+  (including the drizzle-zod pattern), Prisma, postgres.js, and Kysely.
+
+### Changed
+
+- npm `description` repositioned to the correctness promise above.
+- CI `integration` now also runs `temporal-sql doctor` against the live server
+  and publishes its Markdown report to the job summary.
+
+### Evaluated and not shipped
+
+- Prisma TypedSQL and TypeORM adapters: neither is materially simpler than the
+  documented raw-SQL / transformer paths
+  (`private/experiment-prisma-typedsql-typeorm.md`).
+
 ## [0.3.0] — 2026-07-30
 
 Finishes array support. The six array OIDs have been defined in `src/oids.ts`

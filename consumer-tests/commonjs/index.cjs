@@ -19,6 +19,8 @@ const { registerTypeParsers, registerPassthrough, encode, makePgTypes } = requir
 const { temporalTypes } = require("temporal-sql/postgres-js");
 const { interval: drizzleInterval, intervalArray: drizzleIntervalArray } = require("temporal-sql/drizzle");
 const { assertTemporalSqlSession, configureTemporalSqlSession } = require("temporal-sql/session");
+const { runDoctor, renderDoctorText } = require("temporal-sql/doctor");
+const { decodePgRange, encodePgRange, decodePgMultirange, decodePlainDate, encodePlainDate } = require("temporal-sql");
 
 // Root export: execute a codec end to end.
 const d = decodeDuration("1 year 2 mons 3 days 04:05:06");
@@ -64,10 +66,22 @@ assert.equal(makePgTypes({ mode: "passthrough" }).getTypeParser(1186)("3 days"),
 // A non-string reaching the parser names the fix instead of "malformed literal".
 assert.throws(() => parsePgArray([new Date()]), /registerPassthrough/);
 
-// Registration is reversible.
+// Ranges & multiranges (v0.4.0) resolve through the CJS build too.
+const range = decodePgRange("[2024-01-01,2024-01-05)", decodePlainDate);
+assert.equal(range.lower.toString(), "2024-01-01");
+assert.equal(encodePgRange(range, encodePlainDate), '["2024-01-01","2024-01-05")');
+assert.equal(decodePgMultirange("{}", decodePlainDate).length, 0);
+assert.equal(typeof encode.instantRange, "function");
+assert.equal(typeof temporalTypes.plainDateRange.parse, "function");
+
+// Doctor (v0.4.0) resolves and runs through the CJS build.
+assert.equal(typeof runDoctor, "function");
+assert.equal(typeof renderDoctorText, "function");
+
+// Registration is reversible. 18 OIDs: 6 scalars + 6 arrays + 3 ranges + 3 multiranges.
 const seen = new Map();
 const restore = registerPassthrough({ setTypeParser: (oid, fn) => seen.set(oid, fn) });
-assert.equal(seen.size, 12);
+assert.equal(seen.size, 18);
 assert.equal(typeof restore, "function");
 restore();
 

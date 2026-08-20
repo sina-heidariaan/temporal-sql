@@ -18,9 +18,19 @@ import {
   encodePgArray,
   decodeZonedDateTimeArray,
   encodeZonedDateTimeArray,
+  parsePgRange,
+  formatPgRange,
+  decodePgRange,
+  encodePgRange,
+  splitPgMultirange,
+  decodePgMultirange,
+  encodePgMultirange,
+  decodePlainDateTime,
   type EncodeOptions,
   type TimeWithOffset,
   type PgArrayElement,
+  type TemporalRange,
+  type RawRange,
 } from "temporal-sql";
 import {
   registerTypeParsers,
@@ -39,6 +49,14 @@ import {
   type SessionQuery,
   type SessionDiagnostic,
 } from "temporal-sql/session";
+import {
+  runDoctor,
+  renderDoctorText,
+  renderDoctorMarkdown,
+  type DoctorReport,
+  type DoctorCheck,
+  type DoctorStatus,
+} from "temporal-sql/doctor";
 
 // Inferred return types must be the real Temporal types, not `any`.
 const duration = decodeDuration("3 days");
@@ -81,11 +99,42 @@ const serialized: string = temporalTypes.duration.serialize(duration);
 const parsed: unknown = temporalTypes.duration.parse("3 days");
 const fromOids: number[] = temporalTypes.duration.from;
 
-// Drizzle column factories return callable builders.
+// Drizzle column factories return callable builders (two-call form)…
 const intervalColumn = interval();
 const timestamptzColumn = timestamptz(opts);
 const intervalArrayColumn = intervalArray();
 const timestamptzArrayColumn = timestamptzArray(opts);
+// …and build named columns directly (single-call form, v0.4.0).
+const namedTimestamptz = timestamptz("created_at");
+const namedInterval = interval("window", opts);
+
+// Ranges & multiranges (v0.4.0): typed bounds, raw grammar, and encode helpers.
+const dateRange: TemporalRange<ReturnType<typeof decodePlainDate>> = decodePgRange(
+  "[2024-01-01,2024-01-05)",
+  decodePlainDate,
+);
+const lowerYear: number | undefined = dateRange.lower?.year;
+const rawRange: RawRange = parsePgRange("(,)");
+const rangeLiteral: string = formatPgRange(rawRange);
+const encodedRange: string = encodePgRange(dateRange, (v) => v.toString());
+const rawRanges: string[] = splitPgMultirange("{}");
+const tsRanges: TemporalRange<ReturnType<typeof decodePlainDateTime>>[] = decodePgMultirange(
+  "{}",
+  decodePlainDateTime,
+);
+const encodedMulti: string = encodePgMultirange(tsRanges, (v) => v.toString());
+const encodedInstantRange: string = encode.instantRange(
+  { lower: instant, upper: null, lowerInclusive: true, upperInclusive: false, empty: false },
+  opts,
+);
+
+// Doctor: the report and check shapes are typed.
+const doctorQuery: SessionQuery = async () => ({ rows: [{ DateStyle: "ISO, MDY" }] });
+const doctorPromise: Promise<DoctorReport> = runDoctor(doctorQuery, { packages: { pg: "8.13.0" } });
+const statusValue: DoctorStatus = "pass";
+const checkShape: Pick<DoctorCheck, "id" | "status"> = { id: "connectivity", status: statusValue };
+const textRenderer: (r: DoctorReport) => string = renderDoctorText;
+const mdRenderer: (r: DoctorReport) => string = renderDoctorMarkdown;
 
 // Arrays: the grammar helpers and the typed element mapping.
 const elements: PgArrayElement[] = parsePgArray('{"1 day",NULL}');
@@ -137,6 +186,8 @@ export {
   timestamptzColumn,
   intervalArrayColumn,
   timestamptzArrayColumn,
+  namedTimestamptz,
+  namedInterval,
   sessionDiag,
   configured2,
   elements,
@@ -144,4 +195,17 @@ export {
   scopedTypes,
   scopedParser,
   zonedList,
+  dateRange,
+  lowerYear,
+  rawRange,
+  rangeLiteral,
+  encodedRange,
+  rawRanges,
+  tsRanges,
+  encodedMulti,
+  encodedInstantRange,
+  doctorPromise,
+  checkShape,
+  textRenderer,
+  mdRenderer,
 };

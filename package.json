@@ -1,7 +1,7 @@
 {
   "name": "temporal-sql",
-  "version": "0.3.0",
-  "description": "Postgres-first codecs mapping SQL date/time types to TC39 Temporal (timestamptz, timestamp, date, time, timetz, interval) for pg, postgres.js, Drizzle and Prisma — with correct interval⇄Duration and surfaced µs↔ns precision. No JS Date.",
+  "version": "0.4.0",
+  "description": "TC39 Temporal + PostgreSQL correctness — without JS Date, timezone surprises, or silent precision loss. Temporal-native intervals, timestamps, ranges, multiranges and arrays for pg, postgres.js, Drizzle and Prisma, plus a `temporal-sql doctor` compatibility checker.",
   "type": "module",
   "license": "MIT",
   "author": "sina-heidariaan (https://github.com/sina-heidariaan)",
@@ -23,6 +23,9 @@
     "drizzle",
     "prisma",
     "timestamptz",
+    "daterange",
+    "tstzrange",
+    "multirange",
     "interval",
     "duration",
     "codec",
@@ -97,7 +100,20 @@
         "types": "./dist/session.d.cts",
         "default": "./dist/session.cjs"
       }
+    },
+    "./doctor": {
+      "import": {
+        "types": "./dist/doctor.d.ts",
+        "default": "./dist/doctor.js"
+      },
+      "require": {
+        "types": "./dist/doctor.d.cts",
+        "default": "./dist/doctor.cjs"
+      }
     }
+  },
+  "bin": {
+    "temporal-sql": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsup",

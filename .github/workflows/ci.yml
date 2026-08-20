@@ -65,11 +65,33 @@ jobs:
       - run: npm run build
       - run: node scripts/check-consumers.mjs --peers=${{ matrix.peers }}
 
+  consumers-drizzle-beta:
+    # Tracks drizzle-orm's `beta` dist-tag (the 1.x codec-layer line). Kept out
+    # of the required consumers matrix on purpose: an upstream beta break should
+    # be visible here without blocking our releases.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/check-consumers.mjs --peers=drizzle-beta
+
   integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The executable Postgres axis of the compatibility matrix
+        # (COMPATIBILITY.md): the oldest line we claim and the newest stable.
+        postgres: ["14", "18.4"]
     services:
       postgres:
-        image: postgres:18.4
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: temporal_sql_test
@@ -93,3 +115,8 @@ jobs:
       # Generate the Prisma client so the @prisma/adapter-pg round-trip test runs.
       - run: npx prisma generate
       - run: npm test
+      # The doctor is part of the gate: it must pass against a healthy database
+      # and its Markdown report lands in the job summary.
+      - run: npm run build
+      - run: node dist/cli.js doctor --url "$DATABASE_URL"
+      - run: node dist/cli.js doctor --url "$DATABASE_URL" --markdown >> "$GITHUB_STEP_SUMMARY"

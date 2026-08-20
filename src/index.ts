@@ -26,6 +26,19 @@ export {
   type PgArrayElement,
 } from "./array.js";
 
+// Postgres range / multirange literal ⇄ TemporalRange, shared by the adapters
+export {
+  type TemporalRange,
+  type RawRange,
+  parsePgRange,
+  formatPgRange,
+  decodePgRange,
+  encodePgRange,
+  splitPgMultirange,
+  decodePgMultirange,
+  encodePgMultirange,
+} from "./range.js";
+
 // interval ⇄ Duration (headline)
 export { decodeDuration, encodeDuration } from "./interval.js";
 

@@ -53,6 +53,14 @@ const decoders: Array<[number, (value: string) => unknown]> = [
   [OID.timeArray, (v) => C.decodePgArray(v, C.decodePlainTime)],
   [OID.timetzArray, (v) => C.decodePgArray(v, C.decodeTimetz)],
   [OID.intervalArray, (v) => C.decodePgArray(v, C.decodeDuration)],
+  // Range OIDs decode each bound through the matching scalar codec; multiranges
+  // decode to an array of ranges. An unbounded side stays `null`.
+  [OID.daterange, (v) => C.decodePgRange(v, C.decodePlainDate)],
+  [OID.tsrange, (v) => C.decodePgRange(v, C.decodePlainDateTime)],
+  [OID.tstzrange, (v) => C.decodePgRange(v, C.decodeInstant)],
+  [OID.datemultirange, (v) => C.decodePgMultirange(v, C.decodePlainDate)],
+  [OID.tsmultirange, (v) => C.decodePgMultirange(v, C.decodePlainDateTime)],
+  [OID.tstzmultirange, (v) => C.decodePgMultirange(v, C.decodeInstant)],
 ];
 
 /**
@@ -192,4 +200,17 @@ export const encode = {
   durationArray: (values: readonly (Temporal.Duration | null)[], opts?: EncodeOptions) =>
     C.encodePgArray(values, (v) => C.encodeDuration(v, opts)),
   zonedDateTimeArray: C.encodeZonedDateTimeArray,
+  // Ranges / multiranges — pass with a cast such as `$1::tstzrange`.
+  plainDateRange: (range: C.TemporalRange<Temporal.PlainDate>) =>
+    C.encodePgRange(range, (v) => C.encodePlainDate(v)),
+  plainDateTimeRange: (range: C.TemporalRange<Temporal.PlainDateTime>, opts?: EncodeOptions) =>
+    C.encodePgRange(range, (v) => C.encodePlainDateTime(v, opts)),
+  instantRange: (range: C.TemporalRange<Temporal.Instant>, opts?: EncodeOptions) =>
+    C.encodePgRange(range, (v) => C.encodeInstant(v, opts)),
+  plainDateMultirange: (ranges: readonly C.TemporalRange<Temporal.PlainDate>[]) =>
+    C.encodePgMultirange(ranges, (v) => C.encodePlainDate(v)),
+  plainDateTimeMultirange: (ranges: readonly C.TemporalRange<Temporal.PlainDateTime>[], opts?: EncodeOptions) =>
+    C.encodePgMultirange(ranges, (v) => C.encodePlainDateTime(v, opts)),
+  instantMultirange: (ranges: readonly C.TemporalRange<Temporal.Instant>[], opts?: EncodeOptions) =>
+    C.encodePgMultirange(ranges, (v) => C.encodeInstant(v, opts)),
 } as const;

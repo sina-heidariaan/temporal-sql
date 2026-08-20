@@ -18,6 +18,8 @@ import { registerTypeParsers, registerPassthrough, encode, makePgTypes } from "t
 import { temporalTypes } from "temporal-sql/postgres-js";
 import { interval as drizzleInterval, intervalArray as drizzleIntervalArray } from "temporal-sql/drizzle";
 import { assertTemporalSqlSession, configureTemporalSqlSession } from "temporal-sql/session";
+import { runDoctor, renderDoctorText, renderDoctorMarkdown } from "temporal-sql/doctor";
+import { decodePgRange, encodePgRange, decodePgMultirange, decodePlainDate, encodePlainDate } from "temporal-sql";
 
 // Root export: execute a codec end to end.
 const d = decodeDuration("1 year 2 mons 3 days 04:05:06");
@@ -64,10 +66,32 @@ assert.equal(makePgTypes({ mode: "passthrough" }).getTypeParser(1186)("3 days"),
 // A non-string reaching the parser names the fix instead of "malformed literal".
 assert.throws(() => parsePgArray([new Date()]), /registerPassthrough/);
 
-// Registration is reversible.
+// Ranges & multiranges (v0.4.0): grammar, codecs, and pg encode helpers.
+const range = decodePgRange("[2024-01-01,2024-01-05)", decodePlainDate);
+assert.equal(range.lower.toString(), "2024-01-01");
+assert.equal(range.lowerInclusive, true);
+assert.equal(range.upperInclusive, false);
+assert.equal(encodePgRange(range, encodePlainDate), '["2024-01-01","2024-01-05")');
+assert.equal(decodePgRange("empty", decodePlainDate).empty, true);
+const multi = decodePgMultirange("{[2024-01-01,2024-01-05),[2024-02-01,2024-02-03)}", decodePlainDate);
+assert.equal(multi.length, 2);
+assert.equal(typeof encode.instantRange, "function");
+assert.equal(typeof encode.plainDateMultirange, "function");
+assert.equal(temporalTypes.plainDateRange.parse("[2024-01-01,2024-01-05)").upper.toString(), "2024-01-05");
+
+// Doctor (v0.4.0): the engine and renderers resolve and run.
+const doctorReport = await runDoctor(async () => {
+  throw new Error("no database in this fixture");
+});
+assert.equal(doctorReport.ok, false);
+assert.equal(doctorReport.checks[0].id, "connectivity");
+assert.ok(renderDoctorText(doctorReport).includes("temporal-sql doctor"));
+assert.ok(renderDoctorMarkdown(doctorReport).startsWith("#"));
+
+// Registration is reversible. 18 OIDs: 6 scalars + 6 arrays + 3 ranges + 3 multiranges.
 const seen = new Map();
 const restore = registerPassthrough({ setTypeParser: (oid, fn) => seen.set(oid, fn) });
-assert.equal(seen.size, 12);
+assert.equal(seen.size, 18);
 assert.equal(typeof restore, "function");
 restore();
 

@@ -1,16 +1,19 @@
 # temporal-sql
 
-> Postgres ⇄ TC39 **Temporal** codecs for `pg`, `postgres.js`, Drizzle, and
-> Prisma. Supports **every PostgreSQL `IntervalStyle`**, correct
-> `interval`↔`Duration`, microsecond-precision safety, and **no JavaScript
-> `Date`** anywhere.
+> **TC39 Temporal + PostgreSQL correctness — without JS `Date`, timezone
+> surprises, or silent precision loss.** Temporal-native PostgreSQL
+> **intervals, timestamps, ranges, and multiranges** for `pg`, `postgres.js`,
+> Drizzle, and Prisma — plus `temporal-sql doctor` to prove your environment
+> is compatible before it bites.
 
 [![npm](https://img.shields.io/npm/v/temporal-sql.svg)](https://www.npmjs.com/package/temporal-sql)
 [![license](https://img.shields.io/npm/l/temporal-sql.svg)](./LICENSE)
 
 **Status: early release (v0.x).** Postgres-first. Round-trip tested to
-microsecond precision against Postgres 18 on `pg`, `postgres.js`, Drizzle, and
-Prisma (`@prisma/adapter-pg`).
+microsecond precision against Postgres 14 and 18 on `pg`, `postgres.js`,
+Drizzle, and Prisma (`@prisma/adapter-pg`). Migrating from JS `Date`? There is
+a step-by-step [Date → Temporal migration guide](./docs/migrations/) for `pg`,
+Drizzle, Prisma, postgres.js, and Kysely.
 
 ```bash
 npm add temporal-sql
@@ -23,16 +26,19 @@ get native `Temporal` on Node 26+ and the polyfill before that, automatically.
 
 ## Requirements
 
-Node **18+**. Driver packages are optional peers — install only the one you use:
+Node **18+**, PostgreSQL **14+** tested (everything except multiranges also
+works down to 9.2). Driver packages are optional peers — install only the one
+you use:
 
 | Peer | Range | Notes |
 |------|-------|-------|
 | `pg` | `>=8.0.0` | Any `pg` 8.x, ESM or CommonJS. |
 | `postgres` | `>=3.4.0` | postgres.js v3 `types` option. |
-| `drizzle-orm` | `>=0.30.0` | Uses `customType` from `drizzle-orm/pg-core`. |
+| `drizzle-orm` | `>=0.30.0` | Uses `customType` from `drizzle-orm/pg-core`. The 1.x beta line is exercised in CI too. |
 
 Each range is installed and executed against the packed tarball in CI, at both
-its lower bound and the current release.
+its lower bound and the current release. The full executed matrix — Node ×
+Postgres × driver/ORM versions — is in [COMPATIBILITY.md](./COMPATIBILITY.md).
 
 ---
 
@@ -93,7 +99,8 @@ Decode is always lossless to microseconds.
 | 1 | JS `Date` mangles timezone intent on non-UTC databases ([prisma#28629](https://github.com/prisma/prisma/issues/28629), [#26786](https://github.com/prisma/prisma/issues/26786)) | `Date` never appears in any code path — `timestamptz` decodes to `Temporal.Instant`. |
 | 2 | `interval` has no sane JS representation | Correct, tested `interval`↔`Duration` incl. negatives, fractions, mixed-sign rejection. |
 | 3 | Silent microsecond↔nanosecond precision loss | Precision is surfaced (throws by default), never dropped quietly. |
-| 4 | No driver ships Temporal support ([prisma#16119](https://github.com/prisma/prisma/issues/16119), [drizzle#5692](https://github.com/drizzle-team/drizzle-orm/issues/5692), postgres.js#856) | One package wires `pg`, `postgres.js`, Drizzle, and Prisma. |
+| 4 | No driver ships Temporal support ([prisma#16119](https://github.com/prisma/prisma/issues/16119), postgres.js#856), and schema tooling can't validate custom Temporal columns ([drizzle#5692](https://github.com/drizzle-team/drizzle-orm/issues/5692)) | One package wires `pg`, `postgres.js`, Drizzle, and Prisma — with a [documented drizzle-zod pattern](./docs/migrations/drizzle.md#drizzle-zod) for #5692. |
+| 5 | Postgres range types have no native ORM story ([prisma#27975](https://github.com/prisma/prisma/issues/27975)) | `daterange`/`tsrange`/`tstzrange` + multiranges decode to `TemporalRange<T>`. |
 
 ---
 
@@ -107,10 +114,14 @@ Decode is always lossless to microseconds.
 | `time` | `Temporal.PlainTime` | |
 | `timetz` | `{ time: PlainTime, offset }` | Temporal has no time+offset type; a struct avoids silent offset loss. |
 | `interval` | `Temporal.Duration` | Mixed-sign intervals throw rather than corrupt. |
+| `daterange` | `TemporalRange<Temporal.PlainDate>` | Bounds, inclusivity flags, unbounded sides, `empty`. |
+| `tsrange` | `TemporalRange<Temporal.PlainDateTime>` | |
+| `tstzrange` | `TemporalRange<Temporal.Instant>` | |
+| `datemultirange` / `tsmultirange` / `tstzmultirange` | `TemporalRange<T>[]` | Postgres 14+. |
 
-Every one of these has an **array** form too — `timestamptz[]`, `timestamp[]`,
+Every scalar type has an **array** form too — `timestamptz[]`, `timestamp[]`,
 `date[]`, `time[]`, `timetz[]`, `interval[]` — decoding to `(T | null)[]`. See
-[Arrays](#arrays).
+[Arrays](#arrays) and [Ranges & multiranges](#ranges--multiranges).
 
 ---
 
@@ -180,11 +191,21 @@ import { registerPassthrough } from "temporal-sql/pg";
 registerPassthrough(); // REQUIRED: hands Drizzle raw text, not a pg Date
 
 export const events = pgTable("events", {
-  at:    t.timestamptz()("at"),
-  span:  t.interval({ onSubMicrosecond: "truncate" })("span"),
-  spans: t.intervalArray()("spans"),   // interval[]
+  at:    t.timestamptz("at"),
+  span:  t.interval("span", { onSubMicrosecond: "truncate" }),
+  spans: t.intervalArray("spans"),   // interval[]
 });
 ```
+
+Every factory also supports the two-call form from earlier releases —
+`t.timestamptz()("at")`, `t.interval({ onSubMicrosecond: "truncate" })("span")`
+— so no schema needs rewriting.
+
+Using **drizzle-zod**? `createInsertSchema` cannot validate custom Temporal
+columns ([drizzle#5692](https://github.com/drizzle-team/drizzle-orm/issues/5692));
+the one-line override pattern is documented in
+[docs/migrations/drizzle.md](./docs/migrations/drizzle.md#drizzle-zod) and
+executed in CI.
 
 > **Why `registerPassthrough()`?** Drizzle's custom columns decode from raw
 > text. Without it, `pg` converts the column to a `Date` first and the point of
@@ -213,9 +234,9 @@ const drizzlePool = new pg.Pool({ connectionString }); // uses the global table
 const rawPool = new pg.Pool({ connectionString, types: makePgTypes() });
 ```
 
-`rawPool` still returns Temporal values. `makePgTypes` answers for the twelve
-date/time OIDs out of its own table and never consults the global one, so the
-passthrough cannot leak into it.
+`rawPool` still returns Temporal values. `makePgTypes` answers for the eighteen
+date/time OIDs (scalars, arrays, ranges, multiranges) out of its own table and
+never consults the global one, so the passthrough cannot leak into it.
 
 The one thing to know: a pool with **no** `types` shares the global table, so
 after `registerPassthrough()` it returns raw strings. Give every pool that should
@@ -301,6 +322,91 @@ this column. With Drizzle, call registerPassthrough() from "temporal-sql/pg"…
 > **Multidimensional arrays are not supported by the typed codecs.** Reading one
 > throws `UnsupportedValueError` naming the limitation — never a silent
 > mis-parse. `parsePgArray` does return the nesting, so you can walk it yourself.
+
+---
+
+## Ranges & multiranges
+
+Postgres range types are the natural model for reservations, availability,
+validity periods, and scheduling — and no driver or ORM maps them to anything
+usable ([prisma#27975](https://github.com/prisma/prisma/issues/27975)). Here
+they decode to a plain, honest object:
+
+```ts
+interface TemporalRange<T> {
+  lower: T | null;            // null = unbounded
+  upper: T | null;
+  lowerInclusive: boolean;    // '[' vs '('
+  upperInclusive: boolean;    // ']' vs ')'
+  empty: boolean;             // the 'empty' range
+}
+```
+
+| SQL type | Decodes to |
+|----------|------------|
+| `daterange` | `TemporalRange<Temporal.PlainDate>` |
+| `tsrange` | `TemporalRange<Temporal.PlainDateTime>` |
+| `tstzrange` | `TemporalRange<Temporal.Instant>` |
+| `datemultirange` / `tsmultirange` / `tstzmultirange` | `TemporalRange<T>[]` (Postgres 14+) |
+
+```ts
+// pg — range OIDs are registered by the same registerTypeParsers() call
+const { rows } = await pool.query("select stay from bookings");
+const stay: TemporalRange<Temporal.PlainDate> = rows[0].stay;
+// { lower: 2024-01-01, upper: 2024-01-05, lowerInclusive: true, upperInclusive: false, empty: false }
+
+await pool.query("insert into bookings (stay) values ($1::daterange)", [
+  encode.plainDateRange({ lower, upper, lowerInclusive: true, upperInclusive: false, empty: false }),
+]);
+
+// postgres.js
+await sql`insert into bookings (stay) values (${ sql.typed.plainDateRange(stay) })`;
+
+// The grammar helpers are exported too
+import { parsePgRange, decodePgRange, decodePgMultirange } from "temporal-sql";
+decodePgRange("[2024-01-01,2024-01-05)", decodePlainDate);
+decodePgMultirange("{[2024-01-01,2024-01-05),[2024-02-01,2024-02-03)}", decodePlainDate);
+```
+
+Full grammar support: `[` `(` / `]` `)` inclusivity, unbounded sides (`(,b]`),
+the `empty` range, and quoted/escaped bound values (both `\"` and `""` escape
+styles). Multirange text is **not** array text — ranges inside `{...}` are bare
+and contain commas — so it gets its own parser, not the array one. Postgres
+canonicalizes on input (e.g. `daterange '[a,b]'` → `[a,b+1)`, overlapping
+multirange parts merge); what you read back is the canonical form.
+
+Range **operators and query builders are out of scope** — this is a codec, not
+an ORM. Encode helpers exist so ranges round-trip: `encode.plainDateRange`,
+`encode.plainDateTimeRange`, `encode.instantRange`, and their `*Multirange`
+siblings (pg), `sql.typed.plainDateRange` etc. (postgres.js).
+
+---
+
+## `temporal-sql doctor`
+
+One command that proves the whole story — session settings, timezone
+independence, microsecond precision, per-type server round-trips, all four
+`IntervalStyle`s, and driver/ORM caveats:
+
+```bash
+npx temporal-sql doctor --url postgres://localhost/mydb    # or $DATABASE_URL
+npx temporal-sql doctor --json       # machine-readable report
+npx temporal-sql doctor --markdown   # e.g. >> $GITHUB_STEP_SUMMARY
+```
+
+Exit code `0` when every check passes, `1` otherwise — drop it into CI as a
+gate. It connects with whichever driver you already have installed (`pg` or
+`postgres`).
+
+The engine is importable and driver-agnostic (pass any query lambda, same as
+the session helpers):
+
+```ts
+import { runDoctor, renderDoctorText } from "temporal-sql/doctor";
+
+const report = await runDoctor((t) => pool.query(t));
+if (!report.ok) console.error(renderDoctorText(report));
+```
 
 ---
 

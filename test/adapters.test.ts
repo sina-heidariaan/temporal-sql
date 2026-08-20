@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Temporal } from "@js-temporal/polyfill";
 import { OID } from "../src/oids.js";
 
-/** Every OID the adapters must cover: the six scalars and their six array types. */
+/** Every OID the adapters must cover: six scalars, six arrays, three ranges, three multiranges. */
 const ALL_OIDS = [
   OID.timestamptz,
   OID.timestamp,
@@ -16,6 +16,12 @@ const ALL_OIDS = [
   OID.timeArray,
   OID.timetzArray,
   OID.intervalArray,
+  OID.daterange,
+  OID.tsrange,
+  OID.tstzrange,
+  OID.datemultirange,
+  OID.tsmultirange,
+  OID.tstzmultirange,
 ].sort((a, b) => a - b);
 
 describe("pg adapter", () => {
@@ -83,9 +89,15 @@ describe("pg adapter", () => {
       "plainTimeArray",
       "timetzArray",
       "durationArray",
+      "plainDateRange",
+      "plainDateTimeRange",
+      "instantRange",
+      "plainDateMultirange",
+      "plainDateTimeMultirange",
+      "instantMultirange",
     ] as const;
     for (const name of writers) expect(typeof encode[name], name).toBe("function");
-    expect(ALL_OIDS).toHaveLength(12);
+    expect(ALL_OIDS).toHaveLength(18);
   });
 });
 
@@ -156,6 +168,54 @@ describe("postgres-js adapter", () => {
     expect(parsed[0]!.days).toBe(1);
     expect(parsed[1]).toBeNull();
   });
+
+  it("registers the three range and three multirange types on their own OIDs", async () => {
+    const { temporalTypes } = await import("../src/postgres-js.js");
+    const pairs: Array<[{ to: number; from: number[] }, number]> = [
+      [temporalTypes.plainDateRange, OID.daterange],
+      [temporalTypes.plainDateTimeRange, OID.tsrange],
+      [temporalTypes.instantRange, OID.tstzrange],
+      [temporalTypes.plainDateMultirange, OID.datemultirange],
+      [temporalTypes.plainDateTimeMultirange, OID.tsmultirange],
+      [temporalTypes.instantMultirange, OID.tstzmultirange],
+    ];
+    for (const [type, oid] of pairs) {
+      expect(type.to).toBe(oid);
+      expect(type.from).toEqual([oid]);
+    }
+  });
+
+  it("range types serialize and parse through the scalar codecs", async () => {
+    const { temporalTypes } = await import("../src/postgres-js.js");
+    const parsed = temporalTypes.plainDateRange.parse("[2024-01-01,2024-01-05)") as {
+      lower: Temporal.PlainDate;
+      upper: Temporal.PlainDate;
+      lowerInclusive: boolean;
+      upperInclusive: boolean;
+      empty: boolean;
+    };
+    expect(parsed.lower.toString()).toBe("2024-01-01");
+    expect(parsed.upper.toString()).toBe("2024-01-05");
+    expect(parsed.lowerInclusive).toBe(true);
+    expect(parsed.upperInclusive).toBe(false);
+    expect(parsed.empty).toBe(false);
+
+    expect(
+      temporalTypes.plainDateRange.serialize({
+        lower: Temporal.PlainDate.from("2024-01-01"),
+        upper: null,
+        lowerInclusive: true,
+        upperInclusive: false,
+        empty: false,
+      }),
+    ).toBe('["2024-01-01",)');
+
+    const multi = temporalTypes.instantMultirange.parse(
+      '{["2024-01-01 00:00:00+00","2024-01-02 00:00:00+00"),["2024-02-01 00:00:00+00","2024-02-03 00:00:00+00")}',
+    ) as Array<{ lower: Temporal.Instant }>;
+    expect(multi).toHaveLength(2);
+    expect(multi[0]!.lower.toString()).toBe("2024-01-01T00:00:00Z");
+  });
 });
 
 describe("drizzle adapter", () => {
@@ -166,6 +226,27 @@ describe("drizzle adapter", () => {
     expect(typeof t.interval()).toBe("function");
     // Building a named column should not throw.
     expect(() => t.timestamptz()("created_at")).not.toThrow();
+  });
+
+  it("single-call form builds the same column as the two-call form", async () => {
+    const t = await import("../src/drizzle.js");
+    const { pgTable } = await import("drizzle-orm/pg-core");
+    const table = pgTable("t1", {
+      at: t.timestamptz("at"),
+      span: t.interval("span", { onSubMicrosecond: "truncate" }),
+      day: t.date("day"),
+      spans: t.intervalArray("spans"),
+    });
+    expect(table.at.getSQLType()).toBe("timestamptz");
+    expect(table.span.getSQLType()).toBe("interval");
+    expect(table.day.getSQLType()).toBe("date");
+    expect(table.spans.getSQLType()).toBe("interval[]");
+    // The EncodeOptions passed in the single call reach the encoder.
+    const subMicro = Temporal.Duration.from({ nanoseconds: 1500 });
+    expect(table.span.mapToDriverValue(subMicro)).toBe("PT0.000001S");
+    // Decode still flows through the codec.
+    const inst = table.at.mapFromDriverValue("2024-01-01 12:00:00+00") as Temporal.Instant;
+    expect(inst.toString()).toBe("2024-01-01T12:00:00Z");
   });
 
   it("array factories build columns with the right SQL type", async () => {

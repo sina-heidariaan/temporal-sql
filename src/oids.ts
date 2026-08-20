@@ -18,6 +18,14 @@ export const OID = {
   timetzArray: 1270,
   interval: 1186,
   intervalArray: 1187,
+  // Range types (Postgres 9.2+) and their multiranges (Postgres 14+). Same
+  // stable pg_type catalog OIDs as above.
+  daterange: 3912,
+  datemultirange: 4535,
+  tsrange: 3908,
+  tsmultirange: 4533,
+  tstzrange: 3910,
+  tstzmultirange: 4534,
 } as const;
 
 export type Oid = (typeof OID)[keyof typeof OID];

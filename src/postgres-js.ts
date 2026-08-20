@@ -83,6 +83,30 @@ export function makeTemporalTypes(opts?: EncodeOptions) {
     parse: (raw) => C.decodePgArray(raw, scalar.parse),
   });
 
+  // Range and multirange variants. Each bound flows through the matching scalar
+  // codec; a missing (unbounded) side is `null`, and `empty` decodes with
+  // `empty: true`.
+  const range = <T>(
+    oid: number,
+    serializeBound: (value: T) => string,
+    parseBound: (raw: string) => T,
+  ): PostgresType<C.TemporalRange<T>> => ({
+    to: oid,
+    from: [oid],
+    serialize: (v) => C.encodePgRange(v, serializeBound),
+    parse: (raw) => C.decodePgRange(raw, parseBound),
+  });
+  const multirange = <T>(
+    oid: number,
+    serializeBound: (value: T) => string,
+    parseBound: (raw: string) => T,
+  ): PostgresType<readonly C.TemporalRange<T>[]> => ({
+    to: oid,
+    from: [oid],
+    serialize: (v) => C.encodePgMultirange(v, serializeBound),
+    parse: (raw) => C.decodePgMultirange(raw, parseBound),
+  });
+
   return {
     instant,
     plainDateTime,
@@ -96,6 +120,12 @@ export function makeTemporalTypes(opts?: EncodeOptions) {
     plainTimeArray: array(plainTime, OID.timeArray),
     timetzArray: array(timetz, OID.timetzArray),
     durationArray: array(duration, OID.intervalArray),
+    plainDateRange: range(OID.daterange, plainDate.serialize, C.decodePlainDate),
+    plainDateTimeRange: range(OID.tsrange, plainDateTime.serialize, C.decodePlainDateTime),
+    instantRange: range(OID.tstzrange, instant.serialize, C.decodeInstant),
+    plainDateMultirange: multirange(OID.datemultirange, plainDate.serialize, C.decodePlainDate),
+    plainDateTimeMultirange: multirange(OID.tsmultirange, plainDateTime.serialize, C.decodePlainDateTime),
+    instantMultirange: multirange(OID.tstzmultirange, instant.serialize, C.decodeInstant),
   };
 }
 
